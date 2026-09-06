@@ -32,6 +32,7 @@ import { attemptMerge } from './MergeAttempt';
 import { PullManager } from './PullManager';
 import { PushManager } from './PushManager';
 import { renamesDeclaredIn } from './RenameRecord';
+import { ProgressCallback, SetupCheck, SetupCheckResult } from './SetupCheck';
 import { SyncStateStore } from './SyncState';
 
 const DEBUG_LOG_LIMIT = 200;
@@ -199,7 +200,17 @@ export class SyncManager {
 		this.state.pendingRenames[origin] = to;
 	}
 
+	/** Compares this vault against the repository before anything is linked. */
+	async runSetupCheck(onProgress?: ProgressCallback): Promise<SetupCheckResult> {
+		return new SetupCheck(this.vault, this.getClient(), this.settings).run(onProgress);
+	}
+
+	private get syncEnabled(): boolean {
+		return this.settings.syncEnabled;
+	}
+
 	markDirty(): void {
+		if (!this.syncEnabled) return;
 		if (this.needsStartingPoint()) {
 			this.dirty = true;
 			return;
@@ -217,6 +228,7 @@ export class SyncManager {
 			if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
 				return;
 			}
+			if (!this.syncEnabled) return;
 			if (Date.now() < this.syncHoldUntil) return;
 			void this.checkRemote();
 		}, PULL_INTERVAL_MS);
@@ -230,6 +242,7 @@ export class SyncManager {
 	}
 
 	async onActivation(): Promise<void> {
+		if (!this.syncEnabled) return;
 		const last = this.state.lastRemoteCheck ? Date.parse(this.state.lastRemoteCheck) : 0;
 		if (Date.now() - last < PULL_INTERVAL_MS) {
 			return;
@@ -1184,7 +1197,7 @@ export class SyncManager {
 		this.refreshUI();
 	}
 
-	private getClient(): GitHubClient {
+	getClient(): GitHubClient {
 		return new GitHubClient(
 			this.settings.githubOwner.trim(),
 			this.settings.githubRepo.trim(),
@@ -1233,6 +1246,7 @@ export class SyncManager {
 	}
 
 	private async checkRemote(): Promise<void> {
+		if (!this.syncEnabled) return;
 		if (this.running) return;
 		if (Date.now() < this.syncHoldUntil) return;
 		if (!this.state.lastSyncedCommit) return;

@@ -216,3 +216,74 @@
 .is-mobile .gitsync-panel .ghs-entry {
   padding: 8px 0;
 }
+
+/* ---------------------------------------------------------------------------
+   Settings: gating and guidance
+   A section that cannot do anything yet is dimmed and inert rather than
+   hidden, so the shape of the setup stays visible while it is unavailable.
+   --------------------------------------------------------------------------- */
+
+.gitsync-dimmed {
+  opacity: 0.45;
+  pointer-events: none;
+  filter: saturate(0.6);
+}
+
+.gitsync-help,
+.gitsync-file-list {
+  margin: 0 0 1em;
+  padding: 0.6em 0.8em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.gitsync-help > summary,
+.gitsync-file-list > summary {
+  cursor: pointer;
+  font-weight: var(--font-medium);
+}
+
+.gitsync-help ol {
+  margin: 0.8em 0 0;
+  padding-left: 1.4em;
+}
+
+.gitsync-help li {
+  margin-bottom: 0.5em;
+  line-height: 1.5;
+}
+
+.gitsync-file-list ul {
+  margin: 0.6em 0 0;
+  padding-left: 1.2em;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+
+.gitsync-danger-zone {
+  margin-top: 1.5em;
+  padding: 0 0.9em 0.4em;
+  border: 1px solid var(--background-modifier-error);
+  border-radius: var(--radius-m);
+}
+
+/* The one state with a single obvious next step, so the whole card is the
+   button. Deliberately louder than the other cards. */
+.ghs-setup {
+  cursor: pointer;
+  border: 2px solid var(--text-error);
+}
+
+.ghs-setup:hover,
+.ghs-setup:focus-visible {
+  background: var(--background-modifier-error-hover);
+  border-color: var(--text-error);
+}
+
+.ghs-setup:focus-visible {
+  outline: 2px solid var(--text-error);
+  outline-offset: 2px;
+}

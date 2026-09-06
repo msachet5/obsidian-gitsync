@@ -113,10 +113,25 @@ export class SyncPanelView extends ItemView {
 		this.fact(facts, 'Files tracked', String(trackedCount));
 
 		if (!state.lastSyncedCommit) {
-			const warn = root.createDiv({ cls: 'ghs-card ghs-warn' });
+			// The whole card is the affordance: this is the one state where there
+			// is exactly one useful thing to do, so it opens settings on click.
+			const warn = root.createDiv({ cls: 'ghs-card ghs-warn ghs-setup' });
+			warn.setAttribute('role', 'button');
+			warn.setAttribute('tabindex', '0');
+			warn.setAttribute('aria-label', 'Set up GitSync');
+			warn.setAttribute('title', 'Set up GitSync');
 			warn.createDiv({
 				cls: 'ghs-warn-text',
-				text: 'Not linked to GitHub yet. Turn on automatic synchronization to choose a starting point.',
+				text: 'Not linked to GitHub yet. Click here to set up GitSync.',
+			});
+
+			const openSettings = (): void => this.host.openSettings();
+			warn.addEventListener('click', openSettings);
+			warn.addEventListener('keydown', (event) => {
+				if (event.key === 'Enter' || event.key === ' ') {
+					event.preventDefault();
+					openSettings();
+				}
 			});
 		}
 

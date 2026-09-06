@@ -2,10 +2,11 @@ import { Notice, Plugin, TAbstractFile, TFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
 import { SyncStateStore, generateDeviceId } from './sync/SyncState';
 import { ConflictModal } from './ui/ConflictModal';
-import { FirstRunModal } from './ui/FirstRunModal';
-import { SettingsTab } from './ui/SettingsTab';
+import { CredentialDraft, SettingsTab } from './ui/SettingsTab';
+import { SetupCheckModal, SetupDecision } from './ui/SetupCheckModal';
 import { StatusBarController } from './ui/StatusBar';
 import { SYNC_PANEL_VIEW_TYPE, SyncPanelView } from './ui/SyncPanelView';
+import { SetupCheckResult, summarize } from './sync/SetupCheck';
 import {
 	DEFAULT_SETTINGS,
 	DEFAULT_STATE,
@@ -43,10 +44,9 @@ export default class GitSyncPlugin extends Plugin {
 	private currentStatus: SyncStatus = 'synced';
 	private currentStatusDetail = 'Ready';
 
-	// Set while the question is on screen or its answer is still being carried
-	// out. Both states must suppress a second prompt: the first would open two
-	// modals, the second would start two adoptions over the same files.
-	private startingPointPending = false;
+	// Set while a comparison is running, so a second Save or toggle cannot start
+	// an overlapping check against the same repository.
+	private checkRunning = false;
 
 	async onload(): Promise<void> {
 		setConfigDir(this.app.vault.configDir);
@@ -64,6 +64,9 @@ export default class GitSyncPlugin extends Plugin {
 					settings: this.settings,
 					saveSettings: () => this.saveSettings(),
 					testConnection: () => this.testConnection(),
+					applyCredentials: (draft) => this.applyCredentials(draft),
+					setSyncEnabled: (enabled) => this.setSyncEnabled(enabled),
+					hasCredentials: () => this.hasCredentials(),
 					pushNow: () => this.syncManager.pushEverything(),
 					resetSyncState: () => this.resetSyncState(),
 					getDeviceId: () => this.state.deviceId,
@@ -97,7 +100,6 @@ export default class GitSyncPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			// A short delay so the vault index is populated before the first scan.
 			window.setTimeout(() => {
-				if (this.promptForStartingPointIfNeeded()) return;
 				void this.syncManager.onActivation();
 			}, 1500);
 		});
@@ -151,41 +153,91 @@ export default class GitSyncPlugin extends Plugin {
 		}
 	}
 
-	// Asked once per vault, and only when there is something to ask about: the
-	// repository has to be configured and no starting commit recorded yet.
-	// Returns true when the question was put, so callers can hold off on doing
-	// anything else.
-	private promptForStartingPointIfNeeded(): boolean {
-		if (this.startingPointPending) return true;
-		if (!this.syncManager.needsStartingPoint()) return false;
+	hasCredentials(): boolean {
+		const { githubOwner, githubRepo, token } = this.settings;
+		return Boolean(githubOwner && githubRepo && token);
+	}
 
-		const configured =
-			this.settings.githubOwner && this.settings.githubRepo && this.settings.token;
-		if (!configured) return false;
+	/** Save. Stores the credentials, then compares vault against repository. */
+	private async applyCredentials(draft: CredentialDraft): Promise<void> {
+		Object.assign(this.settings, draft);
+		await this.persistEverything();
 
-		this.startingPointPending = true;
-		this.setStatus('pending', 'Waiting for a starting point.');
+		if (!this.hasCredentials()) {
+			new Notice('GitSync: owner, repository and token are all required.');
+			return;
+		}
+		await this.runSetupCheck();
+	}
 
-		new FirstRunModal(
-			this.app,
-			`${this.settings.githubOwner}/${this.settings.githubRepo}`,
-			this.managedFiles().length,
-			(choice) => {
-				const adoption =
-					choice === 'local'
-						? this.syncManager.adoptLocal()
-						: this.syncManager.adoptRemote();
-				void adoption.finally(() => {
-					this.startingPointPending = false;
-				});
-			},
-			() => {
-				this.startingPointPending = false;
-				this.setStatus('pending', 'No starting point chosen yet.');
-			},
-		).open();
+	private async setSyncEnabled(enabled: boolean): Promise<void> {
+		this.settings.syncEnabled = enabled;
+		await this.persistEverything();
 
-		return true;
+		if (!enabled) {
+			this.setStatus('pending', 'Synchronization is off.');
+			return;
+		}
+		// Turning it back on asks the same question again, from scratch.
+		if (this.syncManager.needsStartingPoint()) {
+			await this.runSetupCheck();
+		}
+	}
+
+	// Runs the comparison and puts the outcome to the user. Nothing is written
+	// until they answer, and declining leaves synchronization switched off.
+	private async runSetupCheck(): Promise<void> {
+		if (this.checkRunning) return;
+		this.checkRunning = true;
+		this.setStatus('syncing', 'Comparing this vault with GitHub...');
+
+		let result: SetupCheckResult;
+		try {
+			result = await this.syncManager.runSetupCheck((progress) => {
+				if (progress.total > 0 && progress.done % 25 === 0) {
+					this.setStatus(
+						'syncing',
+						`Comparing ${progress.done} of ${progress.total} shared file(s)...`,
+					);
+				}
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Check failed.';
+			console.error('[GitSync]', error);
+			new Notice(`GitSync: ${message}`);
+			this.setStatus('error', message);
+			await this.disableSync();
+			return;
+		} finally {
+			this.checkRunning = false;
+		}
+
+		this.setStatus('pending', `Comparison complete: ${summarize(result)}.`);
+		new SetupCheckModal(this.app, result, (decision) => {
+			void this.applySetupDecision(decision);
+		}).open();
+	}
+
+	private async applySetupDecision(decision: SetupDecision): Promise<void> {
+		if (decision === 'cancel') {
+			new Notice('GitSync: left switched off. Turn Sync on to run the check again.');
+			await this.disableSync();
+			return;
+		}
+
+		// Both remaining decisions are the two starting points the plugin already
+		// knows how to establish.
+		if (decision === 'pull') {
+			await this.syncManager.adoptRemote();
+		} else {
+			await this.syncManager.adoptLocal();
+		}
+	}
+
+	private async disableSync(): Promise<void> {
+		this.settings.syncEnabled = false;
+		await this.persistEverything();
+		this.setStatus('pending', 'Synchronization is off.');
 	}
 
 	private registerCommands(): void {
@@ -310,7 +362,6 @@ export default class GitSyncPlugin extends Plugin {
 		if (this.syncManager) {
 			this.syncManager.destroy();
 			this.syncManager.startPolling();
-			this.promptForStartingPointIfNeeded();
 		}
 	}
 

@@ -7,10 +7,21 @@ import {
 } from '../types';
 import { normalizeExtension, normalizePath } from '../vault/PathFilter';
 
+/** The credential fields, which are edited as a draft and applied by Save. */
+export type CredentialDraft = Pick<
+	GitSyncSettings,
+	'githubOwner' | 'githubRepo' | 'branch' | 'token'
+>;
+
 /** What the settings tab needs from the plugin, kept narrow deliberately. */
 export interface SettingsHost {
 	settings: GitSyncSettings;
 	saveSettings(): Promise<void>;
+	/** Persists the credentials, then runs the setup check against the repo. */
+	applyCredentials(draft: CredentialDraft): Promise<void>;
+	/** Turning this on re-runs the setup check. */
+	setSyncEnabled(enabled: boolean): Promise<void>;
+	hasCredentials(): boolean;
 	testConnection(): Promise<void>;
 	pushNow(): Promise<void>;
 	resetSyncState(): Promise<void>;
@@ -18,23 +29,68 @@ export interface SettingsHost {
 	getStatus(): { status: SyncStatus; detail?: string };
 }
 
+const PAT_STEPS = [
+	'Open GitHub and click your profile picture, then Settings. Scroll to the bottom of the left-hand menu for Developer settings.',
+	'Under Personal access tokens, choose Fine-grained tokens.',
+	'Click Generate new token. Give it a name you will recognise later. The description is optional.',
+	'Set the expiry. "No expiration" keeps it working indefinitely; a shorter one is fine for testing, and you can always generate a new token afterwards.',
+	'Under Repository access, choose Only select repositories and pick the repository you are syncing to. Do not grant access to all repositories.',
+	'Open Repository permissions, find Contents, and set it to Read and write. Nothing else is needed.',
+	'Click Generate token, then copy the token. GitHub shows it only once.',
+	'Paste it into the field above and click Save.',
+];
+
 export class SettingsTab extends PluginSettingTab {
+	private draft: CredentialDraft;
+	private saving = false;
+
 	constructor(
 		app: App,
 		private host: SettingsHost,
 		plugin: Plugin,
 	) {
 		super(app, plugin);
+		this.draft = this.draftFromSettings();
+	}
+
+	private draftFromSettings(): CredentialDraft {
+		const { githubOwner, githubRepo, branch, token } = this.host.settings;
+		return { githubOwner, githubRepo, branch, token };
 	}
 
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.draft = this.saving ? this.draft : this.draftFromSettings();
 
 		containerEl.createEl('p', {
 			text: 'Settings and synchronization state are local to this installation.',
 		});
 
+		this.renderCredentials(containerEl);
+
+		// Nothing below is meaningful until GitHub is reachable, so it stays
+		// visibly out of play rather than silently doing nothing.
+		const gated = containerEl.createDiv();
+		this.setDimmed(gated, !this.host.hasCredentials());
+
+		this.renderSyncToggle(gated);
+
+		const extensions = gated.createDiv();
+		this.setDimmed(extensions, !this.host.settings.syncEnabled);
+		this.renderExtensions(extensions);
+
+		this.renderIgnoredPaths(gated);
+		this.renderDangerZone(gated);
+		this.renderDevice(containerEl);
+	}
+
+	private setDimmed(el: HTMLElement, dimmed: boolean): void {
+		el.toggleClass('gitsync-dimmed', dimmed);
+		el.setAttribute('aria-disabled', String(dimmed));
+	}
+
+	private renderCredentials(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('GitHub').setHeading();
 
 		new Setting(containerEl)
@@ -43,10 +99,9 @@ export class SettingsTab extends PluginSettingTab {
 			.addText((text) =>
 				text
 					.setPlaceholder('Your GitHub Username')
-					.setValue(this.host.settings.githubOwner)
-					.onChange(async (value) => {
-						this.host.settings.githubOwner = value.trim();
-						await this.host.saveSettings();
+					.setValue(this.draft.githubOwner)
+					.onChange((value) => {
+						this.draft.githubOwner = value.trim();
 					}),
 			);
 
@@ -56,10 +111,9 @@ export class SettingsTab extends PluginSettingTab {
 			.addText((text) =>
 				text
 					.setPlaceholder('my-obsidian-vault')
-					.setValue(this.host.settings.githubRepo)
-					.onChange(async (value) => {
-						this.host.settings.githubRepo = value.trim();
-						await this.host.saveSettings();
+					.setValue(this.draft.githubRepo)
+					.onChange((value) => {
+						this.draft.githubRepo = value.trim();
 					}),
 			);
 
@@ -67,9 +121,8 @@ export class SettingsTab extends PluginSettingTab {
 			.setName('Branch')
 			.setDesc('The single synchronization branch. Defaults to main.')
 			.addText((text) =>
-				text.setValue(this.host.settings.branch).onChange(async (value) => {
-					this.host.settings.branch = value.trim() || 'main';
-					await this.host.saveSettings();
+				text.setValue(this.draft.branch).onChange((value) => {
+					this.draft.branch = value.trim() || 'main';
 				}),
 			);
 
@@ -82,28 +135,83 @@ export class SettingsTab extends PluginSettingTab {
 				text.inputEl.type = 'password';
 				text
 					.setPlaceholder('github_pat_...')
-					.setValue(this.host.settings.token)
-					.onChange(async (value) => {
-						this.host.settings.token = value;
-						await this.host.saveSettings();
+					.setValue(this.draft.token)
+					.onChange((value) => {
+						this.draft.token = value.trim();
 					});
 			});
 
+		this.renderTokenHelp(containerEl);
+
 		new Setting(containerEl)
-			.setName('Test connection')
-			.setDesc('Checks authentication, repository access and the configured branch.')
+			.setName('Save')
+			.setDesc(
+				'Stores these details, then compares this vault against the repository before anything is synchronized.',
+			)
+			.addButton((button) => {
+				button
+					.setButtonText(this.saving ? 'Checking…' : 'Save')
+					.setDisabled(this.saving)
+					.onClick(async () => {
+						if (this.saving) return;
+						this.saving = true;
+						this.display();
+						try {
+							await this.host.applyCredentials({ ...this.draft });
+						} finally {
+							this.saving = false;
+							this.display();
+						}
+					});
+				if (!this.saving) button.setCta();
+			})
 			.addButton((button) =>
-				button.setButtonText('Test connection').onClick(async () => {
-					await this.host.testConnection();
+				button
+					.setButtonText('Test connection')
+					.setDisabled(this.saving)
+					.onClick(async () => {
+						await this.host.testConnection();
+					}),
+			);
+	}
+
+	private renderTokenHelp(containerEl: HTMLElement): void {
+		const details = containerEl.createEl('details', { cls: 'gitsync-help' });
+		details.createEl('summary', { text: 'How to get the PAT' });
+
+		const list = details.createEl('ol');
+		for (const step of PAT_STEPS) {
+			list.createEl('li', { text: step });
+		}
+
+		details.createEl('p', {
+			cls: 'setting-item-description',
+			text: 'The token is stored in this plugin\'s data file inside your vault. Anyone with access to the vault folder can read it, so scope the token to the one repository.',
+		});
+	}
+
+	private renderSyncToggle(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Synchronization').setHeading();
+
+		new Setting(containerEl)
+			.setName('Sync')
+			.setDesc(
+				'Turning this on compares the vault against the repository and asks how to proceed. It stays off until that question is answered.',
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.syncEnabled).onChange(async (value) => {
+					await this.host.setSyncEnabled(value);
+					this.display();
 				}),
 			);
 
-		new Setting(containerEl).setName('Synchronization').setHeading();
 		containerEl.createEl('p', {
 			cls: 'setting-item-description',
-			text: `Always on, and identical on every device, so a phone and a desktop never drift into different sync behavior. A push goes out ${PUSH_DELAY_SECONDS} seconds after your last edit. GitHub is checked every five seconds while Obsidian is open and visible, and again as soon as it comes back to the foreground. After every push, ten seconds pass before anything automatic runs again, so an edit made mid-push is sent by a second push rather than racing the first.`,
+			text: `A push goes out ${PUSH_DELAY_SECONDS} seconds after your last edit. GitHub is checked every five seconds while Obsidian is open and visible, and again as soon as it comes back to the foreground. After every push, ten seconds pass before anything automatic runs again, so an edit made mid-push is sent by a second push rather than racing the first.`,
 		});
+	}
 
+	private renderExtensions(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Pull extensions').setHeading();
 		containerEl.createEl('p', {
 			text: this.host.settings.pullExtensions.length
@@ -125,7 +233,9 @@ export class SettingsTab extends PluginSettingTab {
 			this.host.settings.pushExtensions = value;
 			await this.host.saveSettings();
 		});
+	}
 
+	private renderIgnoredPaths(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Ignored paths').setHeading();
 		new Setting(containerEl)
 			.setName('Ignored paths')
@@ -143,23 +253,27 @@ export class SettingsTab extends PluginSettingTab {
 						await this.host.saveSettings();
 					}),
 			);
+	}
 
-		new Setting(containerEl).setName('Actions').setHeading();
-		new Setting(containerEl)
+	private renderDangerZone(containerEl: HTMLElement): void {
+		const zone = containerEl.createDiv({ cls: 'gitsync-danger-zone' });
+		new Setting(zone).setName('Danger zone').setHeading();
+
+		new Setting(zone)
 			.setName('Push')
 			.setDesc(
 				'Sends everything in this vault to GitHub now, without waiting for the timer: new files, edits, renames and deletions. A large batch of deletions is confirmed first. Pulling happens on its own.',
 			)
 			.addButton((button) =>
 				button
-					.setCta()
+					.setWarning()
 					.setButtonText('Push')
 					.onClick(() => {
 						void this.host.pushNow();
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(zone)
 			.setName('Reset and re-pull from GitHub')
 			.setDesc(
 				"Discards this vault's synced files and downloads them again from GitHub. Removed files go to the vault's .trash folder. Anything local that was never pushed will be lost. GitHub is not modified.",
@@ -173,7 +287,9 @@ export class SettingsTab extends PluginSettingTab {
 						this.display();
 					}),
 			);
+	}
 
+	private renderDevice(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Device').setHeading();
 		new Setting(containerEl)
 			.setName('Device ID')

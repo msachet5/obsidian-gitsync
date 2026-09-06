@@ -14,6 +14,8 @@ export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 export const SELF_WRITE_GRACE_MS = 2000;
 
 export interface GitSyncSettings {
+	/** Master switch. Off until the setup check reaches a conclusion. */
+	syncEnabled: boolean;
 	githubOwner: string;
 	githubRepo: string;
 	branch: string;
@@ -66,29 +68,6 @@ export interface PersistedData {
 	state: SyncStateData;
 }
 
-export const DEFAULT_SETTINGS: GitSyncSettings = {
-	githubOwner: '',
-	githubRepo: '',
-	branch: 'main',
-	token: '',
-	pullExtensions: [],
-	pushExtensions: [],
-	ignoredPaths: [],
-};
-
-export const DEFAULT_STATE: SyncStateData = {
-	deviceId: '',
-	lastSyncedCommit: null,
-	lastRemoteCheck: null,
-	lastSuccessfulPull: null,
-	lastSuccessfulPush: null,
-	trackedFiles: {},
-	conflicts: {},
-	lastSyncedTree: {},
-	pendingRenames: {},
-	debugLog: [],
-};
-
 /** The file types Obsidian itself can open. Nothing outside this list syncs. */
 export const SUPPORTED_EXTENSIONS = [
 	'.md',
@@ -115,6 +94,31 @@ export const SUPPORTED_EXTENSIONS = [
 	'.mov',
 	'.mkv',
 ];
+
+export const DEFAULT_SETTINGS: GitSyncSettings = {
+	syncEnabled: true,
+	githubOwner: '',
+	githubRepo: '',
+	branch: 'main',
+	token: '',
+	pullExtensions: [...SUPPORTED_EXTENSIONS],
+	pushExtensions: [...SUPPORTED_EXTENSIONS],
+	ignoredPaths: [],
+};
+
+export const DEFAULT_STATE: SyncStateData = {
+	deviceId: '',
+	lastSyncedCommit: null,
+	lastRemoteCheck: null,
+	lastSuccessfulPull: null,
+	lastSuccessfulPush: null,
+	trackedFiles: {},
+	conflicts: {},
+	lastSyncedTree: {},
+	pendingRenames: {},
+	debugLog: [],
+};
+
 
 /**
  * Coarse platform label used in device ids and commit messages. Obsidian runs

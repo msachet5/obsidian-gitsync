@@ -1,0 +1,164 @@
+import { TFile, Vault } from 'obsidian';
+import { GitHubClient, RemoteSnapshot } from '../github/GitHubClient';
+import { GitSyncSettings } from '../types';
+import { isIgnoredPath, matchesExtensions, normalizePath } from '../vault/PathFilter';
+import { gitBlobSha } from '../vault/VaultScanner';
+
+/**
+ * How this vault stands against the repository, before anything is linked.
+ *
+ * There is no common ancestor at this point, so "clean" can only mean that no
+ * single path differs on both sides. A path that exists in both places with
+ * different content cannot be reconciled without choosing a loser, which is
+ * exactly the decision that has to go to the user.
+ */
+export type SetupRelation =
+	| 'up-to-date'
+	| 'remote-empty'
+	| 'remote-ahead'
+	| 'local-ahead'
+	| 'both-ahead'
+	| 'diverged';
+
+export interface SetupCheckResult {
+	relation: SetupRelation;
+	commitSha: string;
+	/** Paths only this vault has. */
+	localOnly: string[];
+	/** Paths only the repository has. */
+	remoteOnly: string[];
+	/** Paths both hold with different content. These are what make it dirty. */
+	conflicting: string[];
+	localCount: number;
+	remoteCount: number;
+	/** Bytes actually read to settle same-size comparisons. */
+	bytesHashed: number;
+}
+
+export interface CheckProgress {
+	done: number;
+	total: number;
+	path: string;
+}
+
+/** A comparison is cheap until it has to read files; this reports when it does. */
+export type ProgressCallback = (progress: CheckProgress) => void;
+
+export function summarize(result: SetupCheckResult): string {
+	const { localOnly, remoteOnly, conflicting } = result;
+	const parts = [
+		`${remoteOnly.length} only on GitHub`,
+		`${localOnly.length} only here`,
+		`${conflicting.length} differing`,
+	];
+	return parts.join(', ');
+}
+
+export class SetupCheck {
+	constructor(
+		private vault: Vault,
+		private github: GitHubClient,
+		private settings: GitSyncSettings,
+	) {}
+
+	async run(onProgress?: ProgressCallback): Promise<SetupCheckResult> {
+		const ref = await this.github.getBranchReference(true);
+		const commit = await this.github.getCommit(ref.object.sha);
+		const remote = await this.github.readTreeSnapshot(commit.sha, commit.tree.sha);
+		return this.compare(remote, onProgress);
+	}
+
+	private eligibleLocalFiles(): Map<string, TFile> {
+		const extensions = Array.from(
+			new Set([...this.settings.pullExtensions, ...this.settings.pushExtensions]),
+		);
+		const files = new Map<string, TFile>();
+		for (const file of this.vault.getFiles()) {
+			const path = normalizePath(file.path);
+			if (
+				matchesExtensions(path, extensions) &&
+				!isIgnoredPath(path, this.settings.ignoredPaths)
+			) {
+				files.set(path, file);
+			}
+		}
+		return files;
+	}
+
+	private async compare(
+		remote: RemoteSnapshot,
+		onProgress?: ProgressCallback,
+	): Promise<SetupCheckResult> {
+		const local = this.eligibleLocalFiles();
+		const extensions = Array.from(
+			new Set([...this.settings.pullExtensions, ...this.settings.pushExtensions]),
+		);
+
+		const localOnly: string[] = [];
+		const remoteOnly: string[] = [];
+		const conflicting: string[] = [];
+		let bytesHashed = 0;
+
+		// Only paths present on both sides can need hashing, so the expensive
+		// work is bounded by the overlap rather than by the size of the vault.
+		const shared: { path: string; file: TFile; sha: string; size?: number }[] = [];
+
+		for (const [path, file] of local) {
+			const entry = remote.entries.get(path);
+			if (!entry) {
+				localOnly.push(path);
+				continue;
+			}
+			// A different size is proof of different content, and costs no read.
+			if (entry.size !== undefined && entry.size !== file.stat.size) {
+				conflicting.push(path);
+				continue;
+			}
+			shared.push({ path, file, sha: entry.sha, size: entry.size });
+		}
+
+		for (const [path, entry] of remote.entries) {
+			if (entry.type !== 'blob') continue;
+			if (!matchesExtensions(path, extensions)) continue;
+			if (isIgnoredPath(path, this.settings.ignoredPaths)) continue;
+			if (!local.has(path)) remoteOnly.push(path);
+		}
+
+		let done = 0;
+		for (const item of shared) {
+			onProgress?.({ done, total: shared.length, path: item.path });
+			const bytes = await this.vault.readBinary(item.file);
+			bytesHashed += bytes.byteLength;
+			if ((await gitBlobSha(bytes)) !== item.sha) {
+				conflicting.push(item.path);
+			}
+			done++;
+		}
+		onProgress?.({ done, total: shared.length, path: '' });
+
+		return {
+			relation: relationOf(remote, localOnly, remoteOnly, conflicting),
+			commitSha: remote.commitSha,
+			localOnly,
+			remoteOnly,
+			conflicting,
+			localCount: local.size,
+			remoteCount: remote.entries.size,
+			bytesHashed,
+		};
+	}
+}
+
+function relationOf(
+	remote: RemoteSnapshot,
+	localOnly: string[],
+	remoteOnly: string[],
+	conflicting: string[],
+): SetupRelation {
+	if (conflicting.length) return 'diverged';
+	if (!remote.entries.size) return 'remote-empty';
+	if (!localOnly.length && !remoteOnly.length) return 'up-to-date';
+	if (!localOnly.length) return 'remote-ahead';
+	if (!remoteOnly.length) return 'local-ahead';
+	return 'both-ahead';
+}
