@@ -252,14 +252,19 @@ src/
 ├── sync/
 │   ├── ChangeDetector.ts
 │   ├── ConflictDetector.ts
+│   ├── MergeAttempt.ts
 │   ├── PullManager.ts
 │   ├── PushManager.ts
+│   ├── RenameRecord.ts
 │   ├── SyncManager.ts
-│   └── SyncState.ts
+│   ├── SyncState.ts
+│   └── TextMerge.ts
 ├── ui/
 │   ├── ConflictModal.ts
+│   ├── FirstRunModal.ts
 │   ├── SettingsTab.ts
-│   └── StatusBar.ts
+│   ├── StatusBar.ts
+│   └── SyncPanelView.ts
 └── vault/
     ├── PathFilter.ts
     └── VaultScanner.ts
