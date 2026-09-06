@@ -149,3 +149,6 @@ data.json
 # Build output. Tracked for now because there is no build pipeline yet;
 # once src/ and esbuild land, uncomment this and ship main.js as a release asset.
 # main.js
+
+# Local dev marker for the hot-reload plugin
+.hotreload

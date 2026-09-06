@@ -8,12 +8,6 @@ export interface FileSnapshot {
 	bytes: ArrayBuffer;
 }
 
-export function normalizeExtension(extension: string): string {
-	const value = extension.trim().toLowerCase();
-	if (!value) return '';
-	return value.startsWith('.') ? value : `.${value}`;
-}
-
 function toHex(buffer: ArrayBuffer): string {
 	return Array.from(new Uint8Array(buffer))
 		.map((byte) => byte.toString(16).padStart(2, '0'))

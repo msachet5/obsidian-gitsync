@@ -5,8 +5,7 @@ import {
 	SUPPORTED_EXTENSIONS,
 	SyncStatus,
 } from '../types';
-import { normalizePath } from '../vault/PathFilter';
-import { normalizeExtension } from '../vault/VaultScanner';
+import { normalizeExtension, normalizePath } from '../vault/PathFilter';
 
 /** What the settings tab needs from the plugin, kept narrow deliberately. */
 export interface SettingsHost {

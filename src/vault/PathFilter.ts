@@ -1,5 +1,3 @@
-import { normalizeExtension } from './VaultScanner';
-
 /**
  * Obsidian's configuration folder is user-configurable, so its real name is
  * supplied once at load rather than assumed to be `.obsidian`.
@@ -14,6 +12,13 @@ export function setConfigDir(dir: string): void {
 /** Paths the plugin refuses to touch regardless of settings. */
 function alwaysIgnoredPrefixes(): string[] {
 	return ['.trash', configDir];
+}
+
+/** Lowercases an extension and guarantees the leading dot. */
+export function normalizeExtension(extension: string): string {
+	const value = extension.trim().toLowerCase();
+	if (!value) return '';
+	return value.startsWith('.') ? value : `.${value}`;
 }
 
 export function normalizePath(path: string): string {
