@@ -48,9 +48,7 @@ export function isIgnoredPath(path: string, ignoredPaths: string[]): boolean {
 	return ignoredPaths.some((ignored) => matches(normalizePath(ignored.trim())));
 }
 
-// Control characters are genuinely illegal in Windows filenames, so matching
-// them here is the point rather than an oversight.
-// eslint-disable-next-line no-control-regex
+// eslint-disable-next-line no-control-regex -- control characters are genuinely illegal in Windows filenames, so matching them is the point
 const WINDOWS_ILLEGAL = /[<>:"|?*\x00-\x1f]/;
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
 
