@@ -141,3 +141,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Obsidian plugin
+# Runtime settings written by the plugin. Contains the personal access token.
+data.json
+
+# Build output. Tracked for now because there is no build pipeline yet;
+# once src/ and esbuild land, uncomment this and ship main.js as a release asset.
+# main.js
