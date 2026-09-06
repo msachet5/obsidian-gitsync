@@ -1,9 +1,10 @@
 {
-  "id": "gitsync",
-  "name": "GitSync",
-  "version": "0.0.1",
-  "minAppVersion": "1.5.0",
-  "description": "Synchronize selected vault files with a GitHub repository using the GitHub REST API. Works on desktop and mobile.",
-  "author": "Sachet",
-  "isDesktopOnly": false
+	"id": "gitsync",
+	"name": "GitSync",
+	"version": "0.0.1",
+	"minAppVersion": "1.5.0",
+	"description": "Synchronize selected vault files with a GitHub repository using the GitHub REST API. Works on desktop and mobile.",
+	"author": "Sachet",
+	"authorUrl": "https://github.com/msachet5",
+	"isDesktopOnly": false
 }
