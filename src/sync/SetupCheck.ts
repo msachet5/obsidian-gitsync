@@ -39,6 +39,8 @@ export interface CheckProgress {
 	done: number;
 	total: number;
 	path: string;
+	/** Bytes that will have to be read to settle the same-size comparisons. */
+	totalBytes: number;
 }
 
 /** A comparison is cheap until it has to read files; this reports when it does. */
@@ -62,7 +64,15 @@ export class SetupCheck {
 	) {}
 
 	async run(onProgress?: ProgressCallback): Promise<SetupCheckResult> {
-		const ref = await this.github.getBranchReference(true);
+		// A repository with no commits has no branch to read. That is not an
+		// error, it just means everything here is new.
+		const ref = await this.github.getBranchReferenceOrNull(true);
+		if (ref === null) {
+			return this.compare(
+				{ commitSha: '', treeSha: '', entries: new Map() },
+				onProgress,
+			);
+		}
 		const commit = await this.github.getCommit(ref.object.sha);
 		const remote = await this.github.readTreeSnapshot(commit.sha, commit.tree.sha);
 		return this.compare(remote, onProgress);
@@ -124,9 +134,13 @@ export class SetupCheck {
 			if (!local.has(path)) remoteOnly.push(path);
 		}
 
+		// Announced before any reading starts, so the caller can warn that a
+		// large comparison is about to take a while rather than looking stuck.
+		const totalBytes = shared.reduce((sum, item) => sum + item.file.stat.size, 0);
+
 		let done = 0;
 		for (const item of shared) {
-			onProgress?.({ done, total: shared.length, path: item.path });
+			onProgress?.({ done, total: shared.length, path: item.path, totalBytes });
 			const bytes = await this.vault.readBinary(item.file);
 			bytesHashed += bytes.byteLength;
 			if ((await gitBlobSha(bytes)) !== item.sha) {
@@ -134,7 +148,7 @@ export class SetupCheck {
 			}
 			done++;
 		}
-		onProgress?.({ done, total: shared.length, path: '' });
+		onProgress?.({ done, total: shared.length, path: '', totalBytes });
 
 		return {
 			relation: relationOf(remote, localOnly, remoteOnly, conflicting),

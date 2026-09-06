@@ -84,6 +84,10 @@ export class SyncManager {
 
 	private activity: ActivityEntry[] = [];
 
+	// The last error already announced. A failing token or an exhausted rate
+	// limit repeats on every poll, and a notice each time would be unusable.
+	private lastErrorMessage: string | null = null;
+
 	constructor(
 		private vault: Vault,
 		private settings: GitSyncSettings,
@@ -608,6 +612,7 @@ export class SyncManager {
 		this.state.lastRemoteCheck = new Date().toISOString();
 		await this.stateStore.save(this.state);
 
+		this.clearErrorLatch();
 		this.dirty = false;
 		if (result.deferredUntil !== null) {
 			this.dirty = true;
@@ -826,6 +831,7 @@ export class SyncManager {
 		}
 
 		const now = new Date().toISOString();
+		this.clearErrorLatch();
 		this.state.lastSyncedCommit = remoteHeadSha;
 		this.state.lastSyncedTree = nextTree;
 		this.state.lastRemoteCheck = now;
@@ -1306,10 +1312,20 @@ export class SyncManager {
 		}
 
 		console.error('[GitSync]', error);
-		this.record('error', message);
 		this.setStatus('error', message);
-		new Notice(`GitSync: ${message}`);
+
+		const isRepeat = message === this.lastErrorMessage;
+		this.lastErrorMessage = message;
+		if (!isRepeat) {
+			this.record('error', message);
+			new Notice(`GitSync: ${message}`);
+		}
 		this.refreshUI();
+	}
+
+	/** Called once anything succeeds, so the next failure is announced again. */
+	private clearErrorLatch(): void {
+		this.lastErrorMessage = null;
 	}
 
 	destroy(): void {

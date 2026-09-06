@@ -4,6 +4,7 @@ import {
 	GitHubClient,
 	NewTreeEntry,
 	RemoteSnapshot,
+	isMissingBranch,
 } from '../github/GitHubClient';
 import { EMPTY_TREE_SHA, GitSyncSettings, SyncStateData, TrackedFile, devicePlatform } from '../types';
 import { isIgnoredPath, isSafeVaultPath, matchesExtensions } from '../vault/PathFilter';
@@ -129,7 +130,12 @@ export class PushManager {
 		let staleReads = 0;
 
 		for (let attempt = 1; attempt <= MAX_PUSH_ATTEMPTS; attempt++) {
-			const ref = await this.github.getBranchReference(attempt > 1);
+			const ref = await this.github.getBranchReferenceOrNull(attempt > 1);
+			// No branch means an empty repository, so this push writes the history
+			// rather than building on it.
+			if (ref === null) {
+				return this.pushInitialCommit(state, options);
+			}
 			const headSha = ref.object.sha;
 
 			if (await this.github.isStaleHead(headSha)) {
@@ -217,6 +223,68 @@ export class PushManager {
 				: `The branch moved ${MAX_PUSH_ATTEMPTS} times while this push was being built, so it was abandoned rather than force-pushed. Your changes are still local and the next push will send them.` +
 					(lastError instanceof Error ? ` (${lastError.message})` : ''),
 		);
+	}
+
+	/**
+	 * The first commit in a repository that has none. There is no base tree to
+	 * inherit from and no parent to build on, so the tree is written whole and
+	 * the branch is created rather than moved.
+	 */
+	private async pushInitialCommit(
+		state: SyncStateData,
+		options: PushOptions,
+	): Promise<PushResult> {
+		const empty: RemoteSnapshot = {
+			commitSha: '',
+			treeSha: EMPTY_TREE_SHA,
+			entries: new Map(),
+		};
+		const plan = await this.planPush(state, empty, options);
+		const trace = [...plan.trace, 'repository had no commits, creating the first one'];
+
+		const additions = plan.entries.filter((entry) => entry.sha !== null);
+		if (!additions.length) {
+			return { ...this.emptyResult(), remote: empty, trace };
+		}
+
+		const tree = await this.github.createTree(null, additions);
+		const commit = await this.github.createCommit(
+			buildCommitMessage(plan.renamedPaths, state.pendingRenames),
+			tree.sha,
+			null,
+		);
+
+		try {
+			await this.github.createReference(commit.sha);
+		} catch (error) {
+			// Another device created the branch first; the ordinary retry loop
+			// will now find it and build on top instead.
+			if (isMissingBranch(error) || isBranchMovedError(error)) {
+				return this.push(state, options);
+			}
+			throw error;
+		}
+
+		for (const [path, tracked] of plan.pushedTracking) {
+			state.trackedFiles[path] = tracked;
+		}
+
+		return {
+			pushed: true,
+			changedCount: additions.length,
+			commitSha: commit.sha,
+			collisions: plan.collisions,
+			withheldDeletions: [],
+			remote: empty,
+			deletedPaths: [],
+			writtenShas: Object.fromEntries(
+				[...plan.pushedTracking].flatMap(([path, tracked]) =>
+					tracked.remoteSha ? [[path, tracked.remoteSha]] : [],
+				),
+			),
+			deferredUntil: plan.deferredUntil,
+			trace,
+		};
 	}
 
 	private async planPush(

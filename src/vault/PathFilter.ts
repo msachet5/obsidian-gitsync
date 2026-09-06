@@ -48,6 +48,24 @@ export function isIgnoredPath(path: string, ignoredPaths: string[]): boolean {
 	return ignoredPaths.some((ignored) => matches(normalizePath(ignored.trim())));
 }
 
+// Control characters are genuinely illegal in Windows filenames, so matching
+// them here is the point rather than an oversight.
+// eslint-disable-next-line no-control-regex
+const WINDOWS_ILLEGAL = /[<>:"|?*\x00-\x1f]/;
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
+/**
+ * Whether this platform can actually hold the path. Windows rejects several
+ * characters and a handful of device names that GitHub stores happily, so a
+ * repository built elsewhere can contain paths this vault cannot write.
+ */
+export function isWritableOnThisPlatform(path: string, isWindows: boolean): boolean {
+	if (!isWindows) return true;
+	return !normalizePath(path)
+		.split('/')
+		.some((part) => WINDOWS_ILLEGAL.test(part) || WINDOWS_RESERVED.test(part));
+}
+
 export function matchesExtensions(path: string, extensions: string[]): boolean {
 	const normalizedPath = normalizePath(path).toLowerCase();
 	const normalizedExtensions = extensions.map(normalizeExtension);

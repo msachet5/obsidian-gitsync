@@ -67,6 +67,14 @@ export class SettingsTab extends PluginSettingTab {
 			text: 'Settings and synchronization state are local to this installation.',
 		});
 
+		// Two engines writing the same files will each see the other's writes as
+		// someone else's edits, which is exactly how conflicts are manufactured.
+		const caution = containerEl.createDiv({ cls: 'gitsync-caution' });
+		caution.createEl('strong', { text: 'One sync engine at a time. ' });
+		caution.createSpan({
+			text: 'If this vault is also synced by Obsidian Sync, iCloud, Dropbox or OneDrive, the two will overwrite each other and produce conflicts. Turn the others off for this vault.',
+		});
+
 		this.renderCredentials(containerEl);
 
 		// Nothing below is meaningful until GitHub is reachable, so it stays
@@ -81,6 +89,7 @@ export class SettingsTab extends PluginSettingTab {
 		this.renderExtensions(extensions);
 
 		this.renderIgnoredPaths(gated);
+		this.renderRecycleBin(gated);
 		this.renderDangerZone(gated);
 		this.renderDevice(containerEl);
 	}
@@ -233,6 +242,20 @@ export class SettingsTab extends PluginSettingTab {
 			this.host.settings.pushExtensions = value;
 			await this.host.saveSettings();
 		});
+	}
+
+	private renderRecycleBin(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName('Recycle bin')
+			.setDesc(
+				"Keeps every deleted or replaced file in the vault's .trash folder. That folder is never synced to GitHub and is never cleaned up, so it grows until you empty it yourself. With this off, deleted files go to your system trash instead.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.recycleBin).onChange(async (value) => {
+					this.host.settings.recycleBin = value;
+					await this.host.saveSettings();
+				}),
+			);
 	}
 
 	private renderIgnoredPaths(containerEl: HTMLElement): void {

@@ -77,6 +77,16 @@ export class GitHubApiError extends Error {
 	}
 }
 
+/**
+ * True when the branch simply is not there yet: either the repository has no
+ * commits at all (409) or this branch has never been created (404). Both mean
+ * the same thing to the plugin, which is that there is nothing to compare
+ * against and the first push has to create the history.
+ */
+export function isMissingBranch(error: unknown): boolean {
+	return error instanceof GitHubApiError && (error.status === 404 || error.status === 409);
+}
+
 /** ETag per owner/repo/branch, so an unchanged branch read costs no rate limit. */
 const branchRefCache = new Map<string, { etag: string; ref: GitReference }>();
 
@@ -331,7 +341,7 @@ export class GitHubClient {
 		}
 		const entries = new Map<string, GitTreeEntry>();
 		for (const entry of response.tree) {
-			if (entry.type === 'blob') {
+			if (entry.type === 'blob' && entry.mode !== '120000') {
 				entries.set(entry.path.replace(/\\/g, '/'), entry);
 			}
 		}
@@ -346,19 +356,45 @@ export class GitHubClient {
 		return this.request('POST', this.repoPath('/git/blobs'), { content, encoding });
 	}
 
-	async createTree(baseTreeSha: string, tree: NewTreeEntry[]): Promise<GitTree> {
+	/** A null base tree builds the tree from nothing, for a first commit. */
+	async createTree(baseTreeSha: string | null, tree: NewTreeEntry[]): Promise<GitTree> {
 		return this.request('POST', this.repoPath('/git/trees'), {
-			base_tree: baseTreeSha,
+			...(baseTreeSha === null ? {} : { base_tree: baseTreeSha }),
 			tree,
 		});
 	}
 
-	async createCommit(message: string, treeSha: string, parentSha: string): Promise<GitCommit> {
+	/** A null parent creates a root commit, which is what an empty repo needs. */
+	async createCommit(
+		message: string,
+		treeSha: string,
+		parentSha: string | null,
+	): Promise<GitCommit> {
 		return this.request('POST', this.repoPath('/git/commits'), {
 			message,
 			tree: treeSha,
-			parents: [parentSha],
+			parents: parentSha === null ? [] : [parentSha],
 		});
+	}
+
+	/** Creates the branch itself. Only used when the repository had no commits. */
+	async createReference(commitSha: string): Promise<GitReference> {
+		const created = await this.request<GitReference>('POST', this.repoPath('/git/refs'), {
+			ref: `refs/heads/${this.branch}`,
+			sha: commitSha,
+		});
+		lastPushedHead.set(this.cacheKey(), commitSha);
+		return created;
+	}
+
+	/** The branch head, or null when the branch does not exist yet. */
+	async getBranchReferenceOrNull(skipCache = false): Promise<GitReference | null> {
+		try {
+			return await this.getBranchReference(skipCache);
+		} catch (error) {
+			if (isMissingBranch(error)) return null;
+			throw error;
+		}
 	}
 
 	async updateReference(currentRef: GitReference, newCommitSha: string): Promise<GitReference> {

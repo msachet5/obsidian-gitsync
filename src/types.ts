@@ -16,6 +16,8 @@ export const SELF_WRITE_GRACE_MS = 2000;
 export interface GitSyncSettings {
 	/** Master switch. Off until the setup check reaches a conclusion. */
 	syncEnabled: boolean;
+	/** Keep deleted files in the vault's own .trash instead of the system one. */
+	recycleBin: boolean;
 	githubOwner: string;
 	githubRepo: string;
 	branch: string;
@@ -95,14 +97,38 @@ export const SUPPORTED_EXTENSIONS = [
 	'.mkv',
 ];
 
+/**
+ * What a vault syncs before anyone changes anything: notes, the two Obsidian
+ * file formats, and the small image types people actually paste into notes.
+ *
+ * Audio, video and PDF are supported but deliberately left off. They are the
+ * file types large enough to run into GitHub's per-blob ceiling and to make a
+ * first sync painfully slow, and unlike notes they are rarely the thing
+ * someone urgently needs on two devices. They are one checkbox away.
+ */
+export const DEFAULT_EXTENSIONS = [
+	'.md',
+	'.canvas',
+	'.base',
+	'.png',
+	'.jpg',
+	'.jpeg',
+	'.webp',
+	'.svg',
+];
+
+/** Warn beyond this before hashing, because the check stops feeling instant. */
+export const LARGE_CHECK_BYTES = 200 * 1024 * 1024;
+
 export const DEFAULT_SETTINGS: GitSyncSettings = {
 	syncEnabled: true,
+	recycleBin: false,
 	githubOwner: '',
 	githubRepo: '',
 	branch: 'main',
 	token: '',
-	pullExtensions: [...SUPPORTED_EXTENSIONS],
-	pushExtensions: [...SUPPORTED_EXTENSIONS],
+	pullExtensions: [...DEFAULT_EXTENSIONS],
+	pushExtensions: [...DEFAULT_EXTENSIONS],
 	ignoredPaths: [],
 };
 

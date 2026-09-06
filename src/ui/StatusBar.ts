@@ -8,7 +8,7 @@ const LABELS: Record<SyncStatus, string> = {
 	pulling: '↓ Pulling',
 	pushing: '↑ Pushing',
 	conflict: '⚠ Conflict',
-	error: '✕ Error',
+	error: '✕ GitSync not working',
 };
 
 export class StatusBarController {

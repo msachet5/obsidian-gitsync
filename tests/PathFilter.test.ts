@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
 	isIgnoredPath,
 	isSafeVaultPath,
+	isWritableOnThisPlatform,
 	matchesExtensions,
 	normalizeExtension,
 	normalizePath,
@@ -71,5 +72,28 @@ describe('normalizeExtension', () => {
 		assert.equal(normalizeExtension(' MD '), '.md');
 		assert.equal(normalizeExtension('.PNG'), '.png');
 		assert.equal(normalizeExtension('  '), '');
+	});
+});
+
+describe('isWritableOnThisPlatform', () => {
+	it('allows anything when not on Windows', () => {
+		assert.equal(isWritableOnThisPlatform('notes/what? really.md', false), true);
+		assert.equal(isWritableOnThisPlatform('notes/a:b.md', false), true);
+	});
+
+	it('rejects characters Windows cannot store', () => {
+		for (const path of ['notes/a:b.md', 'notes/what?.md', 'a|b.md', 'x<y.md', 'q*.md']) {
+			assert.equal(isWritableOnThisPlatform(path, true), false, `expected ${path} rejected`);
+		}
+	});
+
+	it('rejects reserved device names on Windows', () => {
+		assert.equal(isWritableOnThisPlatform('notes/con.md', true), false);
+		assert.equal(isWritableOnThisPlatform('notes/COM1.md', true), false);
+	});
+
+	it('accepts ordinary paths on Windows', () => {
+		assert.equal(isWritableOnThisPlatform('notes/daily/2026-01-01.md', true), true);
+		assert.equal(isWritableOnThisPlatform('notes/contact.md', true), true);
 	});
 });

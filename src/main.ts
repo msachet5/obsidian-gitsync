@@ -10,6 +10,7 @@ import { SetupCheckResult, summarize } from './sync/SetupCheck';
 import {
 	DEFAULT_SETTINGS,
 	DEFAULT_STATE,
+	LARGE_CHECK_BYTES,
 	GitSyncSettings,
 	PersistedData,
 	SyncStateData,
@@ -26,6 +27,11 @@ import {
  * Obsidian does not type the settings modal, so opening this plugin's own tab
  * goes through a narrow cast rather than an app-wide `any`.
  */
+function formatBytes(bytes: number): string {
+	const mb = bytes / (1024 * 1024);
+	return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
+
 interface SettingsCapableApp {
 	setting?: {
 		open(): void;
@@ -158,15 +164,39 @@ export default class GitSyncPlugin extends Plugin {
 		return Boolean(githubOwner && githubRepo && token);
 	}
 
-	/** Save. Stores the credentials, then compares vault against repository. */
+	/**
+	 * Save. Proves the credentials reach the repository before keeping them,
+	 * then compares this vault against it. A silent connection test, so the
+	 * user is told once what is wrong rather than after every later failure.
+	 */
 	private async applyCredentials(draft: CredentialDraft): Promise<void> {
-		Object.assign(this.settings, draft);
-		await this.persistEverything();
-
-		if (!this.hasCredentials()) {
+		if (!draft.githubOwner || !draft.githubRepo || !draft.token) {
 			new Notice('GitSync: owner, repository and token are all required.');
 			return;
 		}
+
+		const { GitHubClient } = await import('./github/GitHubClient');
+		const client = new GitHubClient(
+			draft.githubOwner.trim(),
+			draft.githubRepo.trim(),
+			draft.token,
+			draft.branch.trim() || 'main',
+		);
+
+		try {
+			// An empty repository has no branch to read, which is a valid state
+			// here rather than a failed credential.
+			await client.getBranchReferenceOrNull(true);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Connection failed.';
+			console.error('[GitSync]', error);
+			new Notice(`GitSync: not saved. ${message}`);
+			this.setStatus('error', message);
+			return;
+		}
+
+		Object.assign(this.settings, draft);
+		await this.persistEverything();
 		await this.runSetupCheck();
 	}
 
@@ -189,15 +219,27 @@ export default class GitSyncPlugin extends Plugin {
 	private async runSetupCheck(): Promise<void> {
 		if (this.checkRunning) return;
 		this.checkRunning = true;
-		this.setStatus('syncing', 'Comparing this vault with GitHub...');
+		this.setStatus(
+			'syncing',
+			'Checking vault and repo. Please do not change files while this runs.',
+		);
 
 		let result: SetupCheckResult;
 		try {
+			let warnedLarge = false;
 			result = await this.syncManager.runSetupCheck((progress) => {
+				if (progress.totalBytes > LARGE_CHECK_BYTES && !warnedLarge) {
+					warnedLarge = true;
+					new Notice(
+						`GitSync: this vault and repository share ${formatBytes(progress.totalBytes)} of files. ` +
+							'The check will take a while. You can leave it running.',
+						10000,
+					);
+				}
 				if (progress.total > 0 && progress.done % 25 === 0) {
 					this.setStatus(
 						'syncing',
-						`Comparing ${progress.done} of ${progress.total} shared file(s)...`,
+						`Checking vault and repo — ${progress.done} of ${progress.total} file(s). Please do not change files while this runs.`,
 					);
 				}
 			});
@@ -393,7 +435,7 @@ export default class GitSyncPlugin extends Plugin {
 
 		try {
 			for (const file of managed) {
-				await this.app.vault.trash(file, false);
+				await this.app.vault.trash(file, !this.settings.recycleBin);
 			}
 		} catch (error) {
 			console.error('[GitSync]', error);

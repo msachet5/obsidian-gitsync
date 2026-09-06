@@ -1,9 +1,10 @@
-import { TFile, Vault } from 'obsidian';
+import { Platform, TFile, Vault } from 'obsidian';
 import { GitHubClient, RemoteSnapshot } from '../github/GitHubClient';
 import { GitSyncSettings, SyncStateData, TrackedFile } from '../types';
 import {
 	isIgnoredPath,
 	isSafeVaultPath,
+	isWritableOnThisPlatform,
 	matchesExtensions,
 	normalizePath,
 } from '../vault/PathFilter';
@@ -56,7 +57,7 @@ export class PullManager {
 
 			const file = this.vault.getAbstractFileByPath(path);
 			if (file instanceof TFile) {
-				await this.vault.trash(file, false);
+				await this.vault.trash(file, !this.settings.recycleBin);
 				trace.push(`${path}: found locally, moved to .trash`);
 			} else {
 				trace.push(
@@ -108,7 +109,7 @@ export class PullManager {
 		for (const path of differing) {
 			const file = this.vault.getAbstractFileByPath(normalizePath(path));
 			if (file instanceof TFile) {
-				await this.vault.trash(file, false);
+				await this.vault.trash(file, !this.settings.recycleBin);
 			}
 		}
 
@@ -204,7 +205,15 @@ export class PullManager {
 				entry.sha &&
 				matchesExtensions(path, this.settings.pullExtensions) &&
 				!isIgnoredPath(path, this.settings.ignoredPaths) &&
-				isSafeVaultPath(path),
+				isSafeVaultPath(path) &&
+				isWritableOnThisPlatform(path, Platform.isWin),
+		);
+	}
+
+	/** Remote paths this platform cannot represent, so they can be reported. */
+	unwritablePaths(remote: RemoteSnapshot): string[] {
+		return Array.from(remote.entries.keys()).filter(
+			(path) => !isWritableOnThisPlatform(path, Platform.isWin),
 		);
 	}
 

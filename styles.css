@@ -287,3 +287,15 @@
   outline: 2px solid var(--text-error);
   outline-offset: 2px;
 }
+
+/* A standing caution, not an error: it is advice about the environment the
+   plugin runs in rather than something currently wrong. */
+.gitsync-caution {
+  margin: 0 0 1.2em;
+  padding: 0.7em 0.9em;
+  border-left: 3px solid var(--text-warning);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+  line-height: 1.5;
+}
