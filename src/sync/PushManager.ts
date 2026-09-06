@@ -1,0 +1,455 @@
+import { TFile, Vault } from 'obsidian';
+import {
+	GitHubApiError,
+	GitHubClient,
+	NewTreeEntry,
+	RemoteSnapshot,
+} from '../github/GitHubClient';
+import { EMPTY_TREE_SHA, GitSyncSettings, SyncStateData, TrackedFile, devicePlatform } from '../types';
+import { isIgnoredPath, isSafeVaultPath, matchesExtensions } from '../vault/PathFilter';
+import { bytesToBase64, gitBlobSha, sha256 } from '../vault/VaultScanner';
+import { ChangeDetector } from './ChangeDetector';
+import { attemptMerge } from './MergeAttempt';
+import { RenamePair, formatRenameLine } from './RenameRecord';
+
+const MAX_PUSH_ATTEMPTS = 8;
+const PUSH_RETRY_BACKOFF_MS = [400, 900, 2000, 4000, 6000, 8000, 10000];
+
+/** Deletions at or above this count are confirmed before an automatic push. */
+const BULK_DELETION_THRESHOLD = 5;
+
+/** Git's mode for a non-executable file. Every entry the plugin writes is one. */
+const FILE_MODE = '100644';
+
+export interface PushOptions {
+	includeDeletions: boolean;
+	/** Paths the user renamed themselves, exempt from the new-file settle delay. */
+	userNamed?: Set<string>;
+	confirmDeletions?: (paths: string[]) => boolean;
+}
+
+export interface PushResult {
+	pushed: boolean;
+	changedCount: number;
+	commitSha: string | null;
+	collisions: string[];
+	withheldDeletions: string[];
+	remote: RemoteSnapshot | null;
+	deletedPaths: string[];
+	writtenShas: Record<string, string>;
+	deferredUntil: number | null;
+	trace: string[];
+}
+
+interface PushPlan {
+	entries: NewTreeEntry[];
+	collisions: string[];
+	deletedPaths: string[];
+	withheldDeletions: string[];
+	renamedPaths: string[];
+	pushedTracking: Map<string, TrackedFile>;
+	deferredUntil: number | null;
+	trace: string[];
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function backoffFor(attempt: number): number {
+	return PUSH_RETRY_BACKOFF_MS[attempt - 1] ?? PUSH_RETRY_BACKOFF_MS.at(-1) ?? 10000;
+}
+
+function isBranchMovedError(error: unknown): boolean {
+	return error instanceof GitHubApiError && (error.status === 422 || error.status === 409);
+}
+
+/**
+ * True when applying these entries would leave nothing behind. GitHub's
+ * create-tree endpoint 404s on a tree with no entries, so that case has to be
+ * spotted in advance and answered with the known empty-tree sha.
+ */
+function resultsInEmptyTree(remote: RemoteSnapshot, entries: NewTreeEntry[]): boolean {
+	if (!entries.length) return false;
+	if (entries.some((entry) => entry.sha !== null)) return false;
+
+	const deleted = new Set(entries.map((entry) => entry.path));
+	for (const path of remote.entries.keys()) {
+		if (!deleted.has(path)) return false;
+	}
+	return true;
+}
+
+function formatTimestamp(date: Date): string {
+	const pad = (value: number): string => value.toString().padStart(2, '0');
+	const day = [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('-');
+	const time = [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(':');
+	return `${day} ${time}`;
+}
+
+function buildCommitMessage(
+	renamedPaths: string[],
+	pendingRenames: Record<string, string>,
+): string {
+	const header = `Sync from ${devicePlatform()} at ${formatTimestamp(new Date())}`;
+
+	const pairs = renamedPaths.flatMap<RenamePair>((from) => {
+		const to = pendingRenames[from];
+		return typeof to === 'string' ? [[from, to]] : [];
+	});
+	if (!pairs.length) return header;
+
+	return `${header}\n${formatRenameLine(pairs)}`;
+}
+
+export class PushManager {
+	constructor(
+		private vault: Vault,
+		private github: GitHubClient,
+		private settings: GitSyncSettings,
+	) {}
+
+	// Pushes local changes without pulling first.
+	//
+	// The merge happens on GitHub's side: the new tree is built with the remote's
+	// current tree as its base and carries entries only for the files this device
+	// touched. Every other path, including files another device just changed, is
+	// inherited untouched. Two devices editing different files therefore merge
+	// cleanly with no coordination at all.
+	//
+	// The one case that cannot be resolved this way is the same file changed in
+	// both places. Those paths are detected here, withheld from the commit, and
+	// returned as collisions.
+	async push(state: SyncStateData, options: PushOptions): Promise<PushResult> {
+		if (this.settings.pushExtensions.length === 0) {
+			return this.emptyResult();
+		}
+
+		let lastError: unknown = null;
+		let staleReads = 0;
+
+		for (let attempt = 1; attempt <= MAX_PUSH_ATTEMPTS; attempt++) {
+			const ref = await this.github.getBranchReference(attempt > 1);
+			const headSha = ref.object.sha;
+
+			if (await this.github.isStaleHead(headSha)) {
+				staleReads++;
+				if (attempt < MAX_PUSH_ATTEMPTS) {
+					await sleep(backoffFor(attempt));
+					continue;
+				}
+			}
+
+			const headCommit = await this.github.getCommit(headSha);
+			const remote = await this.github.readTreeSnapshot(headSha, headCommit.tree.sha);
+			const plan = await this.planPush(state, remote, options);
+
+			if (!plan.entries.length) {
+				return {
+					pushed: false,
+					changedCount: 0,
+					commitSha: null,
+					collisions: plan.collisions,
+					withheldDeletions: plan.withheldDeletions,
+					remote,
+					deletedPaths: [],
+					writtenShas: {},
+					deferredUntil: plan.deferredUntil,
+					trace: plan.trace,
+				};
+			}
+
+			const emptying = resultsInEmptyTree(remote, plan.entries);
+			if (emptying) {
+				plan.trace.push(
+					"this commit removes every remaining file — using the empty-tree sha directly, GitHub's create-tree endpoint 404s on that case",
+				);
+			}
+			const treeSha = emptying
+				? EMPTY_TREE_SHA
+				: (await this.github.createTree(remote.treeSha, plan.entries)).sha;
+
+			const message = buildCommitMessage(plan.renamedPaths, state.pendingRenames);
+			const commit = await this.github.createCommit(message, treeSha, headSha);
+
+			try {
+				await this.github.updateReference(ref, commit.sha);
+			} catch (error) {
+				if (isBranchMovedError(error) && attempt < MAX_PUSH_ATTEMPTS) {
+					lastError = error;
+					await sleep(backoffFor(attempt));
+					continue;
+				}
+				throw error;
+			}
+
+			for (const path of plan.deletedPaths) {
+				delete state.trackedFiles[path];
+			}
+			for (const path of plan.renamedPaths) {
+				delete state.pendingRenames[path];
+			}
+			for (const [path, tracked] of plan.pushedTracking) {
+				state.trackedFiles[path] = tracked;
+			}
+
+			return {
+				pushed: true,
+				changedCount: plan.entries.length,
+				commitSha: commit.sha,
+				collisions: plan.collisions,
+				withheldDeletions: plan.withheldDeletions,
+				remote,
+				deferredUntil: plan.deferredUntil,
+				deletedPaths: [...plan.deletedPaths, ...plan.renamedPaths],
+				writtenShas: Object.fromEntries(
+					[...plan.pushedTracking].flatMap(([path, tracked]) =>
+						tracked.remoteSha ? [[path, tracked.remoteSha]] : [],
+					),
+				),
+				trace: plan.trace,
+			};
+		}
+
+		throw new Error(
+			staleReads >= MAX_PUSH_ATTEMPTS - 1
+				? `GitHub kept returning a branch position older than this device's own last push, across ${MAX_PUSH_ATTEMPTS} attempts. Nothing was force-pushed and your changes are still local. This usually clears within a minute, and the next push will send them.`
+				: `The branch moved ${MAX_PUSH_ATTEMPTS} times while this push was being built, so it was abandoned rather than force-pushed. Your changes are still local and the next push will send them.` +
+					(lastError instanceof Error ? ` (${lastError.message})` : ''),
+		);
+	}
+
+	private async planPush(
+		state: SyncStateData,
+		remote: RemoteSnapshot,
+		options: PushOptions,
+	): Promise<PushPlan> {
+		const detector = new ChangeDetector(this.vault, this.settings);
+		const detected = await detector.detectLocalChanges(
+			state,
+			this.settings.pushExtensions,
+			options.userNamed,
+		);
+
+		const trace = [
+			`vault rescan found deleted=[${[...detected.deleted].join(', ')}] modifiedOrCreated=[${[
+				...detected.modifiedOrCreated,
+			].join(', ')}]`,
+		];
+
+		const entries: NewTreeEntry[] = [];
+		const collisions: string[] = [];
+		const deletedPaths: string[] = [];
+		const withheldDeletions: string[] = [];
+		const renamedPaths: string[] = [];
+		const pushedTracking = new Map<string, TrackedFile>();
+
+		for (const path of detected.modifiedOrCreated) {
+			if (!this.isPushable(path)) continue;
+
+			const file = this.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) continue;
+
+			const bytes = await this.vault.readBinary(file);
+			const localBlobSha = await gitBlobSha(bytes);
+			const remoteEntry = remote.entries.get(path);
+			const tracked = state.trackedFiles[path];
+
+			// The remote already holds exactly these bytes, so only the local
+			// bookkeeping was out of date.
+			if (remoteEntry?.sha === localBlobSha) {
+				state.trackedFiles[path] = {
+					localHash: await sha256(bytes),
+					remoteSha: localBlobSha,
+					mtime: file.stat.mtime,
+					size: file.stat.size,
+				};
+				continue;
+			}
+
+			const remoteIsUnknown =
+				remoteEntry !== undefined && (!tracked || tracked.remoteSha !== remoteEntry.sha);
+
+			if (remoteIsUnknown) {
+				const outcome = await attemptMerge(this.github, path, bytes, tracked, remoteEntry);
+				if (!outcome) {
+					collisions.push(path);
+					continue;
+				}
+
+				await this.vault.process(file, () => outcome.merged);
+				const mergedBytes = await this.vault.readBinary(file);
+				const mergedBlob = await this.github.createBlob(
+					bytesToBase64(mergedBytes),
+					'base64',
+				);
+
+				entries.push({ path, mode: FILE_MODE, type: 'blob', sha: mergedBlob.sha });
+				pushedTracking.set(path, {
+					localHash: await sha256(mergedBytes),
+					remoteSha: mergedBlob.sha,
+					mtime: file.stat.mtime,
+					size: file.stat.size,
+				});
+				continue;
+			}
+
+			const blob = await this.github.createBlob(bytesToBase64(bytes), 'base64');
+			entries.push({ path, mode: FILE_MODE, type: 'blob', sha: blob.sha });
+			pushedTracking.set(path, {
+				localHash: await sha256(bytes),
+				remoteSha: blob.sha,
+				mtime: file.stat.mtime,
+				size: file.stat.size,
+			});
+		}
+
+		// A rename is sent as a deletion of the old path. The new path arrives
+		// through the ordinary modified/created route above.
+		const renamedAway = new Set<string>();
+		for (const [from, to] of Object.entries(state.pendingRenames ?? {})) {
+			if (!this.isPushable(from)) continue;
+
+			const destination = this.vault.getAbstractFileByPath(to);
+			if (!(destination instanceof TFile)) {
+				trace.push(
+					`pendingRename ${from} -> ${to}: destination not resolvable via getAbstractFileByPath (got ${
+						destination === null ? 'null' : typeof destination
+					}), dropped WITHOUT pushing a deletion for ${from}`,
+				);
+				delete state.pendingRenames[from];
+				continue;
+			}
+
+			renamedAway.add(from);
+			const remoteEntry = remote.entries.get(from);
+			if (!remoteEntry) {
+				deletedPaths.push(from);
+				renamedPaths.push(from);
+				continue;
+			}
+
+			// The old path changed remotely since this device last saw it, so the
+			// rename is not allowed to remove someone else's edit.
+			const tracked = state.trackedFiles[from];
+			if (tracked?.remoteSha && remoteEntry.sha !== tracked.remoteSha) {
+				continue;
+			}
+
+			entries.push({ path: from, mode: FILE_MODE, type: 'blob', sha: null });
+			deletedPaths.push(from);
+			renamedPaths.push(from);
+		}
+
+		const candidateDeletions = [...detected.deleted].filter(
+			(path) => this.isPushable(path) && !renamedAway.has(path),
+		);
+		for (const path of detected.deleted) {
+			if (candidateDeletions.includes(path)) continue;
+			trace.push(
+				`${path}: vault reports it deleted, but excluded from push — isPushable=${this.isPushable(
+					path,
+				)}, renamedAway=${renamedAway.has(path)}`,
+			);
+		}
+
+		if (candidateDeletions.length) {
+			const verdict = this.screenDeletions(candidateDeletions, state, options);
+			trace.push(
+				`screenDeletions candidates=[${candidateDeletions.join(', ')}] allowed=${
+					verdict.allowed
+				} includeDeletions=${options.includeDeletions} bulkThreshold=${BULK_DELETION_THRESHOLD}`,
+			);
+
+			if (verdict.allowed) {
+				for (const path of candidateDeletions) {
+					const remoteEntry = remote.entries.get(path);
+					if (!remoteEntry) {
+						trace.push(`${path}: already absent on remote, bookkeeping only`);
+						deletedPaths.push(path);
+						continue;
+					}
+
+					const tracked = state.trackedFiles[path];
+					if (tracked?.remoteSha && remoteEntry.sha !== tracked.remoteSha) {
+						trace.push(
+							`${path}: remote changed since last seen, treated as collision — not deleted`,
+						);
+						collisions.push(path);
+						continue;
+					}
+
+					trace.push(`${path}: queued for deletion in this commit`);
+					entries.push({ path, mode: FILE_MODE, type: 'blob', sha: null });
+					deletedPaths.push(path);
+				}
+			} else {
+				withheldDeletions.push(...candidateDeletions);
+			}
+		}
+
+		const deferredUntil = detected.deferred.size
+			? Math.min(...detected.deferred.values())
+			: null;
+
+		return {
+			entries,
+			collisions,
+			deletedPaths,
+			withheldDeletions,
+			renamedPaths,
+			pushedTracking,
+			deferredUntil,
+			trace,
+		};
+	}
+
+	// Decides whether a set of apparent local deletions may be sent at all.
+	private screenDeletions(
+		paths: string[],
+		state: SyncStateData,
+		options: PushOptions,
+	): { allowed: boolean } {
+		if (!options.includeDeletions) {
+			return { allowed: false };
+		}
+
+		// An empty vault alongside a populated tracking table is an index that has
+		// not finished building, never an instruction to delete everything.
+		const localCount = this.vault
+			.getFiles()
+			.filter((file) => matchesExtensions(file.path, this.settings.pushExtensions)).length;
+		if (localCount === 0 && Object.keys(state.trackedFiles).length > 0) {
+			return { allowed: options.confirmDeletions?.(paths) ?? false };
+		}
+
+		if (paths.length >= BULK_DELETION_THRESHOLD) {
+			return { allowed: options.confirmDeletions?.(paths) ?? false };
+		}
+
+		return { allowed: true };
+	}
+
+	private isPushable(path: string): boolean {
+		return (
+			isSafeVaultPath(path) &&
+			!isIgnoredPath(path, this.settings.ignoredPaths) &&
+			matchesExtensions(path, this.settings.pushExtensions)
+		);
+	}
+
+	private emptyResult(): PushResult {
+		return {
+			pushed: false,
+			changedCount: 0,
+			commitSha: null,
+			collisions: [],
+			withheldDeletions: [],
+			remote: null,
+			deletedPaths: [],
+			writtenShas: {},
+			deferredUntil: null,
+			trace: ['no pushExtensions configured — nothing is ever pushed'],
+		};
+	}
+}

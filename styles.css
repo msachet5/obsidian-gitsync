@@ -16,6 +16,13 @@
   word-break: break-word;
 }
 
+/* Replaces the inline margins the selector buttons used to carry. */
+.gitsync-extension-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .gitsync-extension-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
