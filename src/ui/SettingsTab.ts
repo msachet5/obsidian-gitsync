@@ -205,26 +205,21 @@ export class SettingsTab extends PluginSettingTab {
 			});
 		this.renderTokenHelp(token.descEl);
 
-		new Setting(containerEl)
-			.setClass('gitsync-save')
-			.setName('Save')
-			.addButton((button) => {
-				this.saveButton = button;
-				button.onClick(async () => {
-					if (this.saving || !this.allFieldsFilled()) return;
-					this.saving = true;
-					this.refreshSaveButton();
-					try {
-						await this.host.applyCredentials({ ...this.draft });
-					} finally {
-						this.saving = false;
-						this.display();
-					}
-				});
-				// One place decides the label, the enabled state and the accent,
-				// so the button cannot drift out of step with the fields.
-				this.refreshSaveButton();
-			});
+		const saveRow = containerEl.createDiv({ cls: 'gitsync-save-row' });
+		this.saveButton = new ButtonComponent(saveRow).onClick(async () => {
+			if (this.saving || !this.allFieldsFilled()) return;
+			this.saving = true;
+			this.refreshSaveButton();
+			try {
+				await this.host.applyCredentials({ ...this.draft });
+			} finally {
+				this.saving = false;
+				this.display();
+			}
+		});
+		// One place decides the label, the enabled state and the accent, so the
+		// button cannot drift out of step with the fields.
+		this.refreshSaveButton();
 	}
 
 	/**
@@ -348,25 +343,28 @@ export class SettingsTab extends PluginSettingTab {
 		const zone = containerEl.createDiv({ cls: 'gitsync-danger-zone' });
 		new Setting(zone).setName('Danger zone').setHeading();
 
+		const syncing = this.host.settings.syncEnabled;
+
 		new Setting(zone)
 			.setName('Push')
 			.setDesc(
-				'Sends everything in this vault to GitHub now, without waiting for the timer: new files, edits, renames and deletions. A large batch of deletions is confirmed first. Pulling happens on its own.',
+				syncing
+					? 'Not needed while Sync is on: edits go out automatically a few seconds after you stop typing. Only files matching Push extensions are ever sent.'
+					: 'Sends this vault to GitHub now: new files, edits, renames and deletions. Only files matching Push extensions are sent, and ignored paths are skipped. A large batch of deletions is confirmed first.',
 			)
-			.addButton((button) =>
+			.addButton((button) => {
 				button
-					.setWarning()
-					.setButtonText('Push')
+					.setButtonText(syncing ? 'Syncing automatically' : 'Push')
+					.setDisabled(syncing)
 					.onClick(() => {
 						void this.host.pushNow();
-					}),
-			);
+					});
+				if (!syncing) button.setWarning();
+			});
 
 		new Setting(zone)
 			.setName('Reset and re-pull from GitHub')
-			.setDesc(
-				"Discards this vault's synced files and downloads them again from GitHub. Removed files go to the vault's .trash folder. Anything local that was never pushed will be lost. GitHub is not modified.",
-			)
+			.setDesc(this.resetDescription())
 			.addButton((button) =>
 				button
 					.setWarning()
@@ -376,6 +374,15 @@ export class SettingsTab extends PluginSettingTab {
 						this.display();
 					}),
 			);
+	}
+
+	/** Reset reads differently depending on whether copies are kept. */
+	private resetDescription(): string {
+		const scope =
+			'Affects only files matching your Pull or Push extensions; ignored paths are left alone. GitHub is not modified.';
+		return this.host.settings.recycleBin
+			? `Removes this vault's synced files to the vault's .trash folder, then downloads them again from GitHub. ${scope}`
+			: `Removes this vault's synced files and downloads them again from GitHub. No copies are kept, so any local change that was never pushed is lost. Turn on Recycle bin first if you want copies. ${scope}`;
 	}
 
 	private renderDevice(containerEl: HTMLElement): void {

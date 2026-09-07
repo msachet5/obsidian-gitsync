@@ -582,11 +582,15 @@ export default class GitSyncPlugin extends Plugin {
 	// so it is confirmed explicitly and everything it removes goes to .trash.
 	async resetSyncState(): Promise<void> {
 		const managed = this.managedFiles();
+		const keepCopies = this.settings.recycleBin;
+
 		const confirmed = window.confirm(
 			'Reset and re-pull from GitHub?\n\n' +
-				`${managed.length} file(s) in this vault will be moved to .trash and downloaded again from GitHub.\n\n` +
-				'Any local change that has not been pushed yet will be lost. GitHub itself is not modified.\n\n' +
-				'Continue?',
+				`${managed.length} file(s) matching your Pull or Push extensions will be removed and downloaded again from GitHub. Ignored paths are left alone.\n\n` +
+				(keepCopies
+					? "Recycle bin is on, so the current copies are moved to the vault's .trash folder first.\n\n"
+					: 'Recycle bin is off, so no copies are kept. Any local change that was never pushed will be lost permanently.\n\n') +
+				'GitHub itself is not modified.\n\nContinue?',
 		);
 		if (!confirmed) {
 			new Notice('GitSync: reset cancelled. Nothing was changed.');
@@ -598,7 +602,11 @@ export default class GitSyncPlugin extends Plugin {
 
 		try {
 			for (const file of managed) {
-				await this.app.vault.trash(file, !this.settings.recycleBin);
+				// With the recycle bin on the copies are kept in the vault's own
+				// .trash; with it off there is nothing to keep, because every one
+				// of these files is about to be downloaded again.
+				if (keepCopies) await this.app.vault.trash(file, false);
+				else await this.app.vault.delete(file);
 			}
 		} catch (error) {
 			console.error('[GitSync]', error);
