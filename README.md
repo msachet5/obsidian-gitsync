@@ -336,10 +336,39 @@ src/
 
 ## Support
 
+Having trouble or found a bug?
+
+- 🐛 **Bug:** [open an issue](https://github.com/msachet5/obsidian-ultisync/issues/new?labels=bug)
+- 💡 **Feature request:** [open an issue](https://github.com/msachet5/obsidian-ultisync/issues/new?labels=enhancement)
+- ❓ **Question:** [ask in Discussions](https://github.com/msachet5/obsidian-ultisync/discussions)
+
+Anything that names something to build or fix belongs in
+[Issues](https://github.com/msachet5/obsidian-ultisync/issues), bugs and feature
+requests alike, so there is one queue to work through. Discussions is for
+everything else: setup help, questions about how a part of this works, and ideas
+that are not a request yet.
+
+Please check the [existing issues](https://github.com/msachet5/obsidian-ultisync/issues)
+and [discussions](https://github.com/msachet5/obsidian-ultisync/discussions)
+first, in case it has already been answered. Posting needs a free GitHub
+account. There is no anonymous route on purpose: nearly every report about a
+sync problem needs a follow-up question, and an anonymous one cannot be
+answered.
+
+A bug report is most useful with your UltiSync version, your Obsidian version
+and whether you are on desktop or mobile. **Settings → UltiSync → Help → Report
+a bug** opens an issue with all three already filled in.
+
+For anything security-related, please contact me privately through my
+[GitHub profile](https://github.com/msachet5) rather than posting it publicly. A
+token pasted into a public issue is a token you have to revoke.
+
+## Buy me a coffee
+
 UltiSync is free and stays free. If it has been useful, you can buy me a coffee
 at [buymeacoffee.com/sachetmulimani](https://buymeacoffee.com/sachetmulimani).
 
-Support is entirely optional and changes nothing about the plugin: there are no
+This is entirely optional and changes nothing about the plugin: there are no
 paid tiers and no features held back.
 
 ## License

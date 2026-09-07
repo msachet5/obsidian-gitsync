@@ -1,4 +1,12 @@
-import { App, ButtonComponent, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import {
+	apiVersion,
+	App,
+	ButtonComponent,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	setIcon,
+} from 'obsidian';
 import type { SettingDefinitionItem, SettingDefinitionRender } from 'obsidian';
 import {
 	ConnectionState,
@@ -7,6 +15,7 @@ import {
 	SUPPORTED_EXTENSIONS,
 	SyncStatus,
 } from '../types';
+import { devicePlatform } from '../platform';
 import { usesSecretStorage } from '../TokenStore';
 import { normalizeExtension, normalizePath } from '../vault/PathFilter';
 
@@ -79,9 +88,14 @@ const PAT_STEPS = [
 	'Paste it into the field above and click Save.',
 ];
 
+const REPO_URL = 'https://github.com/msachet5/obsidian-ultisync';
+
 export class SettingsTab extends PluginSettingTab {
 	private draft: CredentialDraft;
 	private saving = false;
+
+	// Carried into a bug report, so nobody has to be asked which version broke.
+	private readonly version: string;
 
 	// Held so the button can be updated through its own API. Obsidian's
 	// setDisabled also toggles a class that blocks pointer events, so reaching
@@ -95,6 +109,7 @@ export class SettingsTab extends PluginSettingTab {
 		plugin: Plugin,
 	) {
 		super(app, plugin);
+		this.version = plugin.manifest.version;
 		this.draft = this.draftFromSettings();
 	}
 
@@ -242,6 +257,7 @@ export class SettingsTab extends PluginSettingTab {
 			{ heading: 'Ignored paths', dimmed: gated, rows: [this.ignoredPathsRow()] },
 			{ heading: 'Danger zone', cls: 'ultisync-danger-zone', rows: this.dangerZoneRows() },
 			{ heading: 'Device', rows: this.deviceRows() },
+			{ heading: 'Help', rows: this.helpRows() },
 		];
 	}
 
@@ -669,5 +685,47 @@ export class SettingsTab extends PluginSettingTab {
 				build: () => undefined,
 			},
 		];
+	}
+
+	// ---------------------------------------------------------------------
+	// Help
+	// ---------------------------------------------------------------------
+
+	private helpRows(): RowSpec[] {
+		return [
+			{
+				name: 'Report a bug',
+				desc: 'Opens a new issue on GitHub with the versions and platform already filled in. Posting needs a free GitHub account.',
+				aliases: ['issue', 'github', 'support', 'help', 'feedback'],
+				build: (setting) =>
+					setting.addButton((button) =>
+						button.setButtonText('Report a bug').onClick(() => {
+							window.open(this.bugReportUrl(), '_blank');
+						}),
+					),
+			},
+		];
+	}
+
+	/**
+	 * Fills in what a report is not much use without. Everything here is
+	 * already on screen elsewhere in this tab; prefilling it only saves the
+	 * exchange where it has to be asked for.
+	 */
+	private bugReportUrl(): string {
+		const body = [
+			'What happened:',
+			'',
+			'What you expected instead:',
+			'',
+			'Steps to reproduce:',
+			'',
+			'---',
+			`UltiSync ${this.version}`,
+			`Obsidian ${apiVersion}`,
+			`Platform: ${devicePlatform()}`,
+		].join('\n');
+
+		return `${REPO_URL}/issues/new?labels=bug&body=${encodeURIComponent(body)}`;
 	}
 }
