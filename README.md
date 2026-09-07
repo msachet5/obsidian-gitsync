@@ -334,6 +334,14 @@ src/
     └── VaultScanner.ts
 ```
 
+## Support
+
+UltiSync is free and stays free. If it has been useful, you can buy me a coffee
+at [buymeacoffee.com/sachetmulimani](https://buymeacoffee.com/sachetmulimani).
+
+Support is entirely optional and changes nothing about the plugin: there are no
+paid tiers and no features held back.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
