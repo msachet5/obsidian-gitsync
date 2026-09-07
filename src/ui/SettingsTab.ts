@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import { App, ButtonComponent, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import {
 	ConnectionState,
 	GitSyncSettings,
@@ -46,6 +46,12 @@ const PAT_STEPS = [
 export class SettingsTab extends PluginSettingTab {
 	private draft: CredentialDraft;
 	private saving = false;
+
+	// Held so the button can be updated through its own API. Obsidian's
+	// setDisabled also toggles a class that blocks pointer events, so reaching
+	// past the component and clearing the disabled property alone leaves a
+	// button that looks enabled and cannot be clicked.
+	private saveButton: ButtonComponent | null = null;
 
 	constructor(
 		app: App,
@@ -101,6 +107,7 @@ export class SettingsTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.saveButton = null;
 		this.draft = this.saving ? this.draft : this.draftFromSettings();
 
 		this.renderHeader(containerEl);
@@ -198,10 +205,6 @@ export class SettingsTab extends PluginSettingTab {
 			});
 		this.renderTokenHelp(token.descEl);
 
-		const filled = this.allFieldsFilled();
-		const dirty = this.isDirty();
-		const settled = filled && !dirty && this.host.hasCredentials();
-
 		new Setting(containerEl)
 			.setClass('gitsync-save')
 			.setName('Save')
@@ -209,38 +212,40 @@ export class SettingsTab extends PluginSettingTab {
 				'Stores these details, checks the connection in the background, then compares this vault against the repository.',
 			)
 			.addButton((button) => {
-				const label = this.saving ? 'Checking…' : settled ? 'Saved' : 'Save';
-				button
-					.setButtonText(label)
-					.setDisabled(this.saving || !filled || settled)
-					.onClick(async () => {
-						if (this.saving) return;
-						this.saving = true;
+				this.saveButton = button;
+				button.onClick(async () => {
+					if (this.saving || !this.allFieldsFilled()) return;
+					this.saving = true;
+					this.refreshSaveButton();
+					try {
+						await this.host.applyCredentials({ ...this.draft });
+					} finally {
+						this.saving = false;
 						this.display();
-						try {
-							await this.host.applyCredentials({ ...this.draft });
-						} finally {
-							this.saving = false;
-							this.display();
-						}
-					});
-				if (!this.saving && filled && !settled) button.setCta();
+					}
+				});
+				// One place decides the label, the enabled state and the accent,
+				// so the button cannot drift out of step with the fields.
+				this.refreshSaveButton();
 			});
 	}
 
 	/**
-	 * Redraws only what the Save button depends on. A full display() would
-	 * rebuild the inputs and steal focus on every keystroke.
+	 * Updates only the Save button. A full display() would rebuild the inputs
+	 * and steal focus on every keystroke.
 	 */
 	private refreshSaveButton(): void {
-		const filled = this.allFieldsFilled();
-		const settled = filled && !this.isDirty() && this.host.hasCredentials();
-		const button = this.containerEl.querySelector<HTMLButtonElement>('.gitsync-save button');
+		const button = this.saveButton;
 		if (!button) return;
 
-		button.textContent = this.saving ? 'Checking…' : settled ? 'Saved' : 'Save';
-		button.disabled = this.saving || !filled || settled;
-		button.toggleClass('mod-cta', !this.saving && filled && !settled);
+		const filled = this.allFieldsFilled();
+		const settled = filled && !this.isDirty() && this.host.hasCredentials();
+		const active = !this.saving && filled && !settled;
+
+		button.setButtonText(this.saving ? 'Checking…' : settled ? 'Saved' : 'Save');
+		button.setDisabled(!active);
+		if (active) button.setCta();
+		else button.removeCta();
 	}
 
 	private renderTokenHelp(containerEl: HTMLElement): void {
