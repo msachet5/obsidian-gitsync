@@ -117,10 +117,18 @@ export class PullManager {
 		return { pulled, replaced: differing.length, cancelled: false };
 	}
 
+	/**
+	 * @param overwriteExisting - Set after a reset, which has just cleared the
+	 * vault on purpose. The collision guard below exists to protect a vault that
+	 * already holds work from a first-time pull, and applying it to a reset
+	 * turns a file that resisted deletion into a reason to abandon the whole
+	 * operation.
+	 */
 	async performInitialPull(
 		remote: RemoteSnapshot,
 		state: SyncStateData,
-	): Promise<{ pulled: number }> {
+		overwriteExisting = false,
+	): Promise<{ pulled: number; skipped: number }> {
 		if (this.settings.pullExtensions.length === 0) {
 			throw new Error('Select at least one pull extension before the initial pull.');
 		}
@@ -136,7 +144,9 @@ export class PullManager {
 			);
 		});
 
-		const collisions = paths.filter((path) => this.vault.getAbstractFileByPath(path));
+		const collisions = overwriteExisting
+			? []
+			: paths.filter((path) => this.vault.getAbstractFileByPath(path));
 		if (collisions.length) {
 			const SHOWN = 25;
 			const list = collisions
@@ -154,7 +164,10 @@ export class PullManager {
 		}
 
 		const pulled = await this.downloadAndWrite(paths, remote, state);
-		return { pulled };
+		// Everything in the repository the extension filters exclude. Reported so
+		// a repository that is mostly unsupported file types does not look like a
+		// pull that quietly failed.
+		return { pulled, skipped: remote.entries.size - paths.length };
 	}
 
 	// Blobs are fetched a batch at a time rather than strictly one after another.

@@ -640,20 +640,26 @@ export default class GitSyncPlugin extends Plugin {
 		};
 		await this.persistEverything();
 		this.restartSyncManager();
-		await this.syncManager.initialPull();
+		await this.syncManager.initialPull(true);
 	}
 
-	/** Every vault file the plugin is responsible for, in either direction. */
+	/**
+	 * Every vault file the plugin is responsible for, in either direction.
+	 *
+	 * Files it has previously tracked count even when they no longer match the
+	 * extension lists. Narrowing the selection used to strand them: no longer
+	 * synced, never cleaned up, and invisible to the plugin thereafter.
+	 */
 	private managedFiles(): TFile[] {
 		const extensions = Array.from(
 			new Set([...this.settings.pullExtensions, ...this.settings.pushExtensions]),
 		);
+		const tracked = new Set(Object.keys(this.state.trackedFiles));
+
 		return this.app.vault.getFiles().filter((file) => {
 			const path = normalizePath(file.path);
-			return (
-				matchesExtensions(path, extensions) &&
-				!isIgnoredPath(path, this.settings.ignoredPaths)
-			);
+			if (isIgnoredPath(path, this.settings.ignoredPaths)) return false;
+			return matchesExtensions(path, extensions) || tracked.has(path);
 		});
 	}
 

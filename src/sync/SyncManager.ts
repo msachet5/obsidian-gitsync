@@ -368,7 +368,7 @@ export class SyncManager {
 		}
 	}
 
-	async initialPull(): Promise<void> {
+	async initialPull(overwriteExisting = false): Promise<void> {
 		if (this.running) {
 			this.requested = true;
 			return;
@@ -382,7 +382,7 @@ export class SyncManager {
 			const remote = await github.readTreeSnapshot(commit.sha, commit.tree.sha);
 
 			const pull = new PullManager(this.vault, github, this.settings);
-			const result = await pull.performInitialPull(remote, this.state);
+			const result = await pull.performInitialPull(remote, this.state, overwriteExisting);
 
 			const now = new Date().toISOString();
 			this.state.lastSyncedCommit = remote.commitSha;
@@ -393,7 +393,13 @@ export class SyncManager {
 
 			this.dirty = false;
 			this.setStatus('synced', `Initial pull complete: ${result.pulled} file(s).`);
-			new Notice(`GitSync: initial pull complete (${result.pulled} file(s)).`);
+			new Notice(
+				`GitSync: pulled ${result.pulled} file(s).` +
+					(result.skipped
+						? ` ${result.skipped} file(s) in the repository were skipped because their type is not in your Pull extensions.`
+						: ''),
+				result.skipped ? 12000 : undefined,
+			);
 			this.refreshUI();
 		} catch (error) {
 			this.handleError(error);
