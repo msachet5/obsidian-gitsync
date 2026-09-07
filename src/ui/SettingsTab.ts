@@ -56,7 +56,15 @@ interface RowSpec {
 /** A heading with its rows, rendered as a group in the declarative path. */
 interface SectionSpec {
 	heading?: string;
+	/** Fixed classes, safe to set once when the section is first created. */
 	cls?: string;
+	/**
+	 * Whether the section is currently out of play. Kept apart from `cls`
+	 * because it changes between renders: 1.13 matches groups by heading and
+	 * reuses their elements, applying `cls` only to the ones it has just
+	 * created, so a class added there is never taken off again.
+	 */
+	dimmed?: boolean;
 	rows: RowSpec[];
 }
 
@@ -124,7 +132,11 @@ export class SettingsTab extends PluginSettingTab {
 						name: row.name,
 						desc: row.desc,
 						aliases: row.aliases,
+						// Row renders re-run on every repaint, which is what lets
+						// the gate come back off a group element that 1.13 is
+						// reusing rather than rebuilding.
 						render: (setting) => {
+							this.applyGate(setting, section.dimmed);
 							row.build(setting);
 						},
 					}),
@@ -160,6 +172,7 @@ export class SettingsTab extends PluginSettingTab {
 		for (const section of this.sections()) {
 			const sectionEl = containerEl.createDiv();
 			if (section.cls) sectionEl.addClass(section.cls);
+			sectionEl.toggleClass('ultisync-dimmed', Boolean(section.dimmed));
 			if (section.heading) {
 				new Setting(sectionEl).setName(section.heading).setHeading();
 			}
@@ -208,28 +221,38 @@ export class SettingsTab extends PluginSettingTab {
 	// ---------------------------------------------------------------------
 
 	private sections(): SectionSpec[] {
-		const credentialsMissing = !this.host.hasCredentials();
 		// Nothing below the credentials is meaningful until GitHub is reachable,
 		// so it stays visibly out of play rather than silently doing nothing.
-		const gated = credentialsMissing ? 'ultisync-dimmed' : undefined;
+		const gated = !this.host.hasCredentials();
+		const extensionsGated = gated || !this.host.settings.syncEnabled;
 
 		return [
 			{ heading: 'GitHub', cls: 'ultisync-box', rows: this.credentialRows() },
-			{ heading: 'Synchronization', cls: gated, rows: [this.syncToggleRow()] },
+			{ heading: 'Synchronization', dimmed: gated, rows: [this.syncToggleRow()] },
 			{
 				heading: 'Pull extensions',
-				cls: this.host.settings.syncEnabled ? gated : 'ultisync-dimmed',
+				dimmed: extensionsGated,
 				rows: this.pullExtensionRows(),
 			},
 			{
 				heading: 'Push extensions',
-				cls: this.host.settings.syncEnabled ? gated : 'ultisync-dimmed',
+				dimmed: extensionsGated,
 				rows: [this.pushExtensionRow()],
 			},
-			{ heading: 'Ignored paths', cls: gated, rows: [this.ignoredPathsRow()] },
+			{ heading: 'Ignored paths', dimmed: gated, rows: [this.ignoredPathsRow()] },
 			{ heading: 'Danger zone', cls: 'ultisync-danger-zone', rows: this.dangerZoneRows() },
 			{ heading: 'Device', rows: this.deviceRows() },
 		];
+	}
+
+	/**
+	 * Puts a section in or out of play. The group element is the one `cls`
+	 * lands on and the one holding the heading, so the gate goes there rather
+	 * than on the row, which keeps the heading in step with its rows.
+	 */
+	private applyGate(setting: Setting, dimmed: boolean | undefined): void {
+		const groupEl = setting.settingEl.closest<HTMLElement>('.setting-group');
+		groupEl?.toggleClass('ultisync-dimmed', Boolean(dimmed));
 	}
 
 	private renderHeader(containerEl: HTMLElement): void {
