@@ -97,8 +97,11 @@ export default class GitSyncPlugin extends Plugin {
 		setConfigDir(this.app.vault.configDir);
 		await this.loadSettingsAndState();
 
-		this.statusBar = new StatusBarController(this, this.app.workspace, () =>
-			this.openStatus(),
+		this.statusBar = new StatusBarController(
+			this,
+			this.app.workspace,
+			() => this.openStatus(),
+			() => this.refreshDerivedStatus(),
 		);
 		this.syncManager = this.createSyncManager();
 
@@ -150,7 +153,7 @@ export default class GitSyncPlugin extends Plugin {
 			}, 1500);
 		});
 
-		this.setStatus('synced', 'Ready.');
+		this.refreshDerivedStatus();
 	}
 
 	onunload(): void {
@@ -209,8 +212,11 @@ export default class GitSyncPlugin extends Plugin {
 	}
 
 	private setConnectionState(state: ConnectionState): void {
+		const changed = this.connectionState !== state;
 		this.connectionState = state;
 		this.refreshSettingsTab();
+		// "Checking" is transient and says nothing useful in the status bar.
+		if (changed && state !== 'checking') this.refreshDerivedStatus();
 	}
 
 	/** The settings tab redraws itself when the connection verdict changes. */
@@ -275,9 +281,7 @@ export default class GitSyncPlugin extends Plugin {
 
 	private async setSyncEnabled(enabled: boolean): Promise<void> {
 		if (!enabled) {
-			this.settings.syncEnabled = false;
-			await this.persistEverything();
-			this.setStatus('pending', 'Synchronization is off.');
+			await this.disableSync();
 			return;
 		}
 
@@ -296,7 +300,10 @@ export default class GitSyncPlugin extends Plugin {
 
 		if (this.syncManager.needsStartingPoint()) {
 			await this.runSetupCheck();
+			return;
 		}
+		// Already linked, so switching on simply resumes.
+		this.refreshDerivedStatus();
 	}
 
 	/** Clears credentials and all synchronization bookkeeping. Files are kept. */
@@ -313,7 +320,7 @@ export default class GitSyncPlugin extends Plugin {
 
 		this.restartSyncManager();
 		this.setConnectionState('incomplete');
-		this.setStatus('pending', 'Reset. Enter your GitHub details to begin.');
+		this.refreshDerivedStatus();
 		new Notice('GitSync: credentials and settings cleared. Your files were not touched.');
 	}
 
@@ -371,17 +378,59 @@ export default class GitSyncPlugin extends Plugin {
 			return;
 		}
 
+		// Accepting an outcome is the moment synchronization starts. Enabled
+		// before the transfer so the manager is live for what follows, and
+		// persisted so the switch in settings agrees.
+		this.settings.syncEnabled = true;
+		await this.persistEverything();
+		this.refreshSettingsTab();
+
 		if (decision === 'pull') {
 			await this.syncManager.adoptRemote();
 		} else {
 			await this.syncManager.adoptLocal();
 		}
+
+		this.refreshSettingsTab();
 	}
 
 	private async disableSync(): Promise<void> {
 		this.settings.syncEnabled = false;
 		await this.persistEverything();
-		this.setStatus('pending', 'Synchronization is off.');
+		this.refreshDerivedStatus();
+		this.refreshSettingsTab();
+	}
+
+	/**
+	 * The resting status, worked out from what is actually true rather than
+	 * from whatever the last operation happened to leave behind. Called at the
+	 * points where nothing is in flight, so it never overwrites "Pulling..."
+	 * with a summary of the state it is halfway through changing.
+	 */
+	private refreshDerivedStatus(): void {
+		if (!this.hasCredentials()) {
+			this.setStatus('setup', 'Not set up. Open settings to connect a repository.');
+			return;
+		}
+		if (this.connectionState === 'failed') {
+			this.setStatus('error', 'Not connected. Check the connection and your token.');
+			return;
+		}
+		if (!this.settings.syncEnabled) {
+			this.setStatus('off', 'Synchronization is off.');
+			return;
+		}
+		if (this.syncManager?.needsStartingPoint()) {
+			this.setStatus('pending', 'Waiting for a starting point. Turn Sync on to check.');
+			return;
+		}
+
+		const conflicts = Object.keys(this.state.conflicts).length;
+		if (conflicts) {
+			this.setStatus('conflict', `${conflicts} conflict(s) need attention.`);
+			return;
+		}
+		this.setStatus('synced', 'Up to date.');
 	}
 
 	private confirmReset(): void {

@@ -13,6 +13,8 @@ export interface PanelHost {
 }
 
 const STATUS_COPY: Record<SyncStatus, { label: string; hint: string }> = {
+	setup: { label: 'Not set up', hint: 'No repository connected yet.' },
+	off: { label: 'Sync is off', hint: 'Nothing is being sent or received.' },
 	synced: { label: 'Up to date', hint: 'Everything here matches GitHub.' },
 	pending: { label: 'Waiting to push', hint: 'Local edits are queued for the next push.' },
 	syncing: { label: 'Synchronizing', hint: 'Reconciling both sides.' },

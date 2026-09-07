@@ -162,6 +162,10 @@ export function devicePlatform(): 'mobile' | 'desktop' {
 export type ConnectionState = 'incomplete' | 'checking' | 'healthy' | 'failed';
 
 export type SyncStatus =
+	/** No repository configured yet. */
+	| 'setup'
+	/** Configured, but the switch is off. */
+	| 'off'
 	| 'pending'
 	| 'syncing'
 	| 'pulling'
