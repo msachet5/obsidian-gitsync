@@ -62,6 +62,27 @@
   gap: 8px;
 }
 
+/* Pushed to the far end of the status row. */
+.gitsync-panel .ghs-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 4px;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.gitsync-panel .ghs-icon-button:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
 .gitsync-panel .ghs-status-label {
   font-weight: 600;
   font-size: var(--font-ui-medium);
@@ -136,12 +157,6 @@
 }
 
 /* --- actions ------------------------------------------------------------ */
-
-.gitsync-panel .ghs-actions {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
 
 .gitsync-panel .ghs-button {
   flex: 1;

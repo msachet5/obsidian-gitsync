@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian';
+import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import { ActivityEntry, ActivityKind, SyncStateData, SyncStatus } from '../types';
 
 export const SYNC_PANEL_VIEW_TYPE = 'gitsync-panel';
@@ -104,6 +104,14 @@ export class SyncPanelView extends ItemView {
 		const heading = card.createDiv({ cls: 'ghs-status-heading' });
 		heading.createSpan({ cls: 'ghs-dot' });
 		heading.createSpan({ cls: 'ghs-status-label', text: copy.label });
+
+		// Settings belong beside the state they change, not in a row of their
+		// own competing with the one action that is ever urgent here.
+		const gear = heading.createEl('button', { cls: 'ghs-icon-button' });
+		setIcon(gear, 'settings');
+		gear.setAttribute('aria-label', 'Open GitSync settings');
+		gear.setAttribute('title', 'Open GitSync settings');
+		gear.addEventListener('click', () => this.host.openSettings());
 		card.createDiv({ cls: 'ghs-status-detail', text: detail || copy.hint });
 
 		const conflictCount = Object.keys(state.conflicts).length;
@@ -146,11 +154,6 @@ export class SyncPanelView extends ItemView {
 			warn.createEl('button', { cls: 'mod-cta ghs-button', text: 'Review conflicts' })
 				.addEventListener('click', () => this.host.openConflicts());
 		}
-
-		const actions = root.createDiv({ cls: 'ghs-actions' });
-		actions
-			.createEl('button', { cls: 'ghs-button', text: 'Open settings' })
-			.addEventListener('click', () => this.host.openSettings());
 
 		root.createEl('h4', { cls: 'ghs-heading', text: 'Recent activity' });
 
