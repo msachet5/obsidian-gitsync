@@ -37,6 +37,13 @@ import { SyncStateStore } from './SyncState';
 
 const DEBUG_LOG_LIMIT = 200;
 
+/** Waits between asking GitHub whether it has caught up with our own push. */
+const CONFIRM_BACKOFF_MS = [0, 300, 600, 1200, 2400, 4800];
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 /** Path to blob sha for every blob in a snapshot. */
 function treeMapOf(remote: RemoteSnapshot): Record<string, string> {
 	const map: Record<string, string> = {};
@@ -537,18 +544,63 @@ export class SyncManager {
 	// timer is not, so a bulk deletion waits for someone to look at it rather
 	// than being confirmed by a dialog nobody asked for.
 	async performPush(trigger: PushTrigger = 'automatic'): Promise<void> {
+		// Nothing automatic runs while a push is in flight, however long it takes.
 		this.syncHoldUntil = Date.now() + POLL_HOLD_AFTER_PUSH_MS;
+
+		let landed: string | null = null;
 		try {
-			await this.performPushInternal(trigger);
+			landed = await this.performPushInternal(trigger);
 		} finally {
 			// The settling period counts from the moment the push actually
 			// finished. Arming it only at the start left a long push clear to be
 			// followed immediately by another one.
 			this.syncHoldUntil = Date.now() + POLL_HOLD_AFTER_PUSH_MS;
 		}
+
+		if (landed) await this.waitForBranchToCatchUp(landed);
 	}
 
-	private async performPushInternal(trigger: PushTrigger): Promise<void> {
+	/**
+	 * Replaces a blind wait with an answer.
+	 *
+	 * The hold after a push exists because GitHub's ref reads are eventually
+	 * consistent: read too soon and you get the previous head, which reads as
+	 * every file this device just pushed having been deleted. Waiting a fixed
+	 * ten seconds was only ever a guess at how long that takes.
+	 *
+	 * Asking directly is better in both directions. GitHub usually agrees
+	 * immediately, and the hold is released at once instead of idling. When it
+	 * does lag, the wait lasts as long as the lag rather than as long as the
+	 * guess, and the original ten seconds remains the ceiling.
+	 */
+	private async waitForBranchToCatchUp(commitSha: string): Promise<void> {
+		const github = this.getClient();
+		const deadline = Date.now() + POLL_HOLD_AFTER_PUSH_MS;
+
+		for (const backoff of CONFIRM_BACKOFF_MS) {
+			if (backoff) await sleep(backoff);
+			if (Date.now() >= deadline) break;
+
+			try {
+				github.invalidateBranchCache();
+				const ref = await github.getBranchReference(true);
+				if (ref.object.sha === commitSha) {
+					this.syncHoldUntil = 0;
+					this.debug(`push confirmed on GitHub at ${commitSha.slice(0, 12)}`);
+					return;
+				}
+			} catch {
+				// A failure here is not the push failing; that already succeeded.
+				// Fall through and let the ordinary poll surface any real problem.
+				break;
+			}
+		}
+
+		this.debug('push not confirmed within the settle window, holding for the full period');
+	}
+
+	/** Returns the commit this push created, or null when nothing was pushed. */
+	private async performPushInternal(trigger: PushTrigger): Promise<string | null> {
 		const github = this.getClient();
 		const push = new PushManager(this.vault, github, this.settings);
 
@@ -629,6 +681,8 @@ export class SyncManager {
 					: 'Nothing to push.',
 		);
 		this.refreshUI();
+
+		return result.pushed ? result.commitSha : null;
 	}
 
 	// A collision is the one thing GitHub cannot merge for us: the same file

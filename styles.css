@@ -242,11 +242,16 @@
   font-weight: var(--font-medium);
 }
 
-/* Sits inside the GitHub box with no frame of its own, so opening it simply
-   makes that box taller. */
+/* Sits inside the setting it explains, with no frame of its own, so opening
+   it simply makes that item taller. */
 .gitsync-help {
-  margin: 0 0 0.8em;
+  margin: 0.5em 0 0;
   font-size: var(--font-ui-smaller);
+}
+
+.gitsync-help p {
+  margin: 0.5em 0 0;
+  line-height: 1.45;
 }
 
 .gitsync-help > summary {
@@ -326,9 +331,10 @@
 
 .gitsync-header {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.4em;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8em;
   margin-bottom: 0.8em;
 }
 

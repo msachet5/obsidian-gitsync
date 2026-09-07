@@ -11,6 +11,7 @@ import { SetupCheckResult, summarize } from './sync/SetupCheck';
 import { GitHubApiError } from './github/GitHubClient';
 import {
 	ConnectionState,
+	DEFAULT_EXTENSIONS,
 	DEFAULT_SETTINGS,
 	DEFAULT_STATE,
 	LARGE_CHECK_BYTES,
@@ -52,6 +53,16 @@ function describeConnectionFailure(error: unknown): string {
 	return error instanceof Error ? error.message : 'Connection failed.';
 }
 
+/** A defaults object nobody else shares, so later edits cannot reach back. */
+function freshSettings(): GitSyncSettings {
+	return {
+		...DEFAULT_SETTINGS,
+		pullExtensions: [...DEFAULT_EXTENSIONS],
+		pushExtensions: [...DEFAULT_EXTENSIONS],
+		ignoredPaths: [],
+	};
+}
+
 function formatBytes(bytes: number): string {
 	const mb = bytes / (1024 * 1024);
 	return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
@@ -65,7 +76,7 @@ interface SettingsCapableApp {
 }
 
 export default class GitSyncPlugin extends Plugin {
-	settings: GitSyncSettings = { ...DEFAULT_SETTINGS };
+	settings: GitSyncSettings = freshSettings();
 
 	private state!: SyncStateData;
 	private stateStore!: SyncStateStore;
@@ -293,11 +304,11 @@ export default class GitSyncPlugin extends Plugin {
 		this.syncManager?.destroy();
 
 		const deviceId = this.state.deviceId;
-		this.settings = { ...DEFAULT_SETTINGS };
+		// Mutated rather than replaced: the settings tab and the sync manager
+		// both hold this object, and swapping it would leave them reading the
+		// values that were just cleared.
+		Object.assign(this.settings, freshSettings(), { syncEnabled: false });
 		this.state = { ...DEFAULT_STATE, deviceId };
-		await this.persistEverything();
-
-		this.settings.syncEnabled = false;
 		await this.persistEverything();
 
 		this.restartSyncManager();
@@ -474,7 +485,7 @@ export default class GitSyncPlugin extends Plugin {
 	private async loadSettingsAndState(): Promise<void> {
 		const saved = (await this.loadData()) as Partial<PersistedData> | null;
 
-		this.settings = { ...DEFAULT_SETTINGS, ...(saved?.settings ?? {}) };
+		Object.assign(this.settings, freshSettings(), saved?.settings ?? {});
 		this.stateStore = new SyncStateStore(this, () => this.settings);
 
 		const rawState = saved?.state;

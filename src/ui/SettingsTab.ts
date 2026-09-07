@@ -181,7 +181,7 @@ export class SettingsTab extends PluginSettingTab {
 				}),
 			);
 
-		new Setting(containerEl)
+		const token = new Setting(containerEl)
 			.setName('Personal access token')
 			.setDesc(
 				'Fine-grained token limited to this repository with Contents read/write permission. The token is never logged.',
@@ -196,8 +196,7 @@ export class SettingsTab extends PluginSettingTab {
 						this.refreshSaveButton();
 					});
 			});
-
-		this.renderTokenHelp(containerEl);
+		this.renderTokenHelp(token.descEl);
 
 		const filled = this.allFieldsFilled();
 		const dirty = this.isDirty();
@@ -259,10 +258,11 @@ export class SettingsTab extends PluginSettingTab {
 		});
 	}
 
-	private renderSyncToggle(containerEl: HTMLElement): void {
+	private renderSyncToggle(parent: HTMLElement): void {
+		const containerEl = parent.createDiv({ cls: 'gitsync-box' });
 		new Setting(containerEl).setName('Synchronization').setHeading();
 
-		new Setting(containerEl)
+		const sync = new Setting(containerEl)
 			.setName('Sync')
 			.setDesc(
 				'Turning this on compares the vault against the repository and asks how to proceed. It stays off until that question is answered.',
@@ -274,9 +274,16 @@ export class SettingsTab extends PluginSettingTab {
 				}),
 			);
 
-		containerEl.createEl('p', {
-			cls: 'setting-item-description',
-			text: `A push goes out ${PUSH_DELAY_SECONDS} seconds after your last edit. GitHub is checked every five seconds while Obsidian is open and visible, and again as soon as it comes back to the foreground. After every push, ten seconds pass before anything automatic runs again, so an edit made mid-push is sent by a second push rather than racing the first.`,
+		const details = sync.descEl.createEl('details', { cls: 'gitsync-help' });
+		details.createEl('summary', { text: 'How syncing works' });
+		details.createEl('p', {
+			text: `A push goes out ${PUSH_DELAY_SECONDS} seconds after your last edit, and the timer restarts on every further edit.`,
+		});
+		details.createEl('p', {
+			text: 'GitHub is checked every five seconds while Obsidian is open and visible, and again as soon as it comes back to the foreground. Nothing is checked while the window is hidden.',
+		});
+		details.createEl('p', {
+			text: 'After a push, the plugin asks GitHub whether the new commit has landed and resumes as soon as it says yes, so an edit made during a push is sent by a second push rather than racing the first.',
 		});
 	}
 
