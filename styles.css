@@ -318,7 +318,7 @@
 .gitsync-caution {
   margin: 0 0 1.2em;
   padding: 0.7em 0.9em;
-  border-left: 3px solid var(--text-warning);
+  border-left: 3px solid var(--interactive-accent);
   border-radius: var(--radius-s);
   background: var(--background-secondary);
   font-size: var(--font-ui-small);
@@ -361,10 +361,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: none;
   cursor: pointer;
   color: var(--text-muted);
-  background: transparent;
+  background: var(--background-modifier-border);
+  border-radius: var(--radius-s);
   box-shadow: none;
 }
 
@@ -376,11 +380,16 @@
 /* The credential block reads as one unit, Save included, because none of it
    means anything on its own. */
 .gitsync-box {
-  padding: 0.2em 0.9em 0.6em;
-  margin-bottom: 1.2em;
+  padding: 0.7em 1.4em 1.1em;
+  margin-bottom: 1.4em;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
+  border-radius: 14px;
   background: var(--background-secondary);
+}
+
+/* Marks where one subject ends and the next begins. */
+.gitsync-section-gap {
+  margin-top: 1.8em;
 }
 
 .gitsync-box .setting-item:last-child {

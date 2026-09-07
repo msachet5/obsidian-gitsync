@@ -208,9 +208,6 @@ export class SettingsTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setClass('gitsync-save')
 			.setName('Save')
-			.setDesc(
-				'Stores these details, checks the connection in the background, then compares this vault against the repository.',
-			)
 			.addButton((button) => {
 				this.saveButton = button;
 				button.onClick(async () => {
@@ -269,9 +266,6 @@ export class SettingsTab extends PluginSettingTab {
 
 		const sync = new Setting(containerEl)
 			.setName('Sync')
-			.setDesc(
-				'Turning this on compares the vault against the repository and asks how to proceed. It stays off until that question is answered.',
-			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.host.settings.syncEnabled).onChange(async (value) => {
 					await this.host.setSyncEnabled(value);
@@ -286,9 +280,6 @@ export class SettingsTab extends PluginSettingTab {
 		});
 		details.createEl('p', {
 			text: 'GitHub is checked every five seconds while Obsidian is open and visible, and again as soon as it comes back to the foreground. Nothing is checked while the window is hidden.',
-		});
-		details.createEl('p', {
-			text: 'After a push, the plugin asks GitHub whether the new commit has landed and resumes as soon as it says yes, so an edit made during a push is sent by a second push rather than racing the first.',
 		});
 	}
 
@@ -331,7 +322,10 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	private renderIgnoredPaths(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName('Ignored paths').setHeading();
+		new Setting(containerEl)
+			.setClass('gitsync-section-gap')
+			.setName('Ignored paths')
+			.setHeading();
 		new Setting(containerEl)
 			.setName('Ignored paths')
 			.setDesc('One path or path prefix per line. Example: .obsidian/workspace.json')
@@ -385,7 +379,10 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	private renderDevice(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName('Device').setHeading();
+		new Setting(containerEl)
+			.setClass('gitsync-section-gap')
+			.setName('Device')
+			.setHeading();
 		new Setting(containerEl)
 			.setName('Device ID')
 			.setDesc('Generated locally and never derived from hardware identifiers.')
