@@ -152,3 +152,6 @@ data.json
 
 # Local dev marker for the hot-reload plugin
 .hotreload
+
+# macOS
+.DS_Store
