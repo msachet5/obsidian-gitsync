@@ -168,7 +168,24 @@ export default class GitSyncPlugin extends Plugin {
 			this.state,
 			(status, detail) => this.setStatus(status, detail),
 			() => this.updateStateReference(),
+			(message) => {
+				void this.handleCredentialsRejected(message);
+			},
 		);
+	}
+
+	/**
+	 * GitHub refused the token. Nothing will work again until a person replaces
+	 * it, so synchronization stops instead of retrying every five seconds, and
+	 * the switch and the indicator both say why.
+	 */
+	private async handleCredentialsRejected(message: string): Promise<void> {
+		if (!this.settings.syncEnabled) return;
+		this.settings.syncEnabled = false;
+		await this.persistEverything();
+		this.connectionState = 'failed';
+		this.refreshSettingsTab();
+		this.setStatus('error', message);
 	}
 
 	private statusSnapshot(): { status: SyncStatus; detail?: string } {

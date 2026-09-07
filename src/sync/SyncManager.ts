@@ -55,6 +55,19 @@ function treeMapOf(remote: RemoteSnapshot): Record<string, string> {
 	return map;
 }
 
+/**
+ * Whether GitHub rejected who we are, as opposed to refusing what we asked or
+ * being unreachable. Only 401 qualifies: an expired, revoked or mistyped token.
+ *
+ * Deliberately narrow. A 403 may be nothing worse than a rate limit, a 404 may
+ * be a repository that was renamed back a minute later, 409 and 422 are the
+ * ordinary branch-moved answers a push already retries, and status 0 is simply
+ * no network. None of those are a reason to switch synchronization off.
+ */
+function rejectsCredentials(error: unknown): boolean {
+	return error instanceof GitHubApiError && error.status === 401;
+}
+
 function basename(path: string): string {
 	const cut = path.lastIndexOf('/');
 	return cut >= 0 ? path.slice(cut + 1) : path;
@@ -102,6 +115,9 @@ export class SyncManager {
 		private state: SyncStateData,
 		private setStatus: (status: SyncStatus, detail: string) => void,
 		private refreshUI: () => void,
+		/** Called when the credentials themselves are rejected, never for a
+		 *  problem that can clear on its own. */
+		private onCredentialsRejected: (message: string) => void = () => undefined,
 	) {}
 
 	getState(): SyncStateData {
@@ -1343,7 +1359,8 @@ export class SyncManager {
 		if (error instanceof GitHubApiError) {
 			switch (error.status) {
 				case 401:
-					message = `GitHub authentication failed. Check the token. — ${error.message}`;
+					message =
+						'Bad credentials, please recheck your GitHub creds. The token may have expired or been revoked. Sync has been turned off until you fix it.';
 					break;
 				case 403:
 					message = `GitHub denied the request or rate limiting is active. — ${error.message}`;
@@ -1372,9 +1389,18 @@ export class SyncManager {
 		this.lastErrorMessage = message;
 		if (!isRepeat) {
 			this.record('error', message);
-			new Notice(`GitSync: ${message}`);
+			new Notice(`GitSync: ${message}`, rejectsCredentials(error) ? 15000 : undefined);
 		}
 		this.refreshUI();
+
+		// Retrying is only worth doing for something that can clear on its own.
+		// Being offline clears when the network returns, a rate limit clears with
+		// time, and a moved branch clears on the next attempt. A rejected token
+		// clears when a person does something about it, so the plugin stops and
+		// says so rather than failing every five seconds until someone notices.
+		if (rejectsCredentials(error)) {
+			this.onCredentialsRejected(message);
+		}
 	}
 
 	/** Called once anything succeeds, so the next failure is announced again. */

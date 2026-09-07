@@ -395,6 +395,19 @@
   background: var(--background-secondary);
 }
 
+/* A long description makes the row tall, and the control would otherwise sit
+   against the top of it. The switch or button belongs beside the setting, not
+   above it. */
+.gitsync-box .setting-item,
+.gitsync-danger-zone .setting-item {
+  align-items: center;
+}
+
+.gitsync-box .setting-item-control,
+.gitsync-danger-zone .setting-item-control {
+  align-self: center;
+}
+
 /* Marks where one subject ends and the next begins. */
 .gitsync-section-gap {
   margin-top: 1.8em;
