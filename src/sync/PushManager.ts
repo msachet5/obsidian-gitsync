@@ -16,8 +16,8 @@ import { RenamePair, formatRenameLine } from './RenameRecord';
 const MAX_PUSH_ATTEMPTS = 8;
 const PUSH_RETRY_BACKOFF_MS = [400, 900, 2000, 4000, 6000, 8000, 10000];
 
-/** Deletions at or above this count are confirmed before an automatic push. */
-const BULK_DELETION_THRESHOLD = 5;
+/** More deletions than this in one push are confirmed before they are sent. */
+const BULK_DELETION_THRESHOLD = 20;
 
 /** Git's mode for a non-executable file. Every entry the plugin writes is one. */
 const FILE_MODE = '100644';
@@ -26,7 +26,12 @@ export interface PushOptions {
 	includeDeletions: boolean;
 	/** Paths the user renamed themselves, exempt from the new-file settle delay. */
 	userNamed?: Set<string>;
-	confirmDeletions?: (paths: string[]) => boolean;
+	/**
+	 * Asked before a batch of deletions is sent. "empty-index" is the more
+	 * alarming case: the vault reports nothing at all, which usually means it
+	 * has not finished loading rather than that everything was deleted.
+	 */
+	confirmDeletions?: (paths: string[], reason: 'bulk' | 'empty-index') => boolean;
 }
 
 export interface PushResult {
@@ -473,6 +478,9 @@ export class PushManager {
 	}
 
 	// Decides whether a set of apparent local deletions may be sent at all.
+	// This guards what this device sends, not what it accepts: deletions
+	// arriving from the repository are applied on their own terms, however many
+	// there are, because they were already someone's deliberate decision.
 	private screenDeletions(
 		paths: string[],
 		state: SyncStateData,
@@ -488,11 +496,11 @@ export class PushManager {
 			.getFiles()
 			.filter((file) => matchesExtensions(file.path, this.settings.pushExtensions)).length;
 		if (localCount === 0 && Object.keys(state.trackedFiles).length > 0) {
-			return { allowed: options.confirmDeletions?.(paths) ?? false };
+			return { allowed: options.confirmDeletions?.(paths, 'empty-index') ?? false };
 		}
 
-		if (paths.length >= BULK_DELETION_THRESHOLD) {
-			return { allowed: options.confirmDeletions?.(paths) ?? false };
+		if (paths.length > BULK_DELETION_THRESHOLD) {
+			return { allowed: options.confirmDeletions?.(paths, 'bulk') ?? false };
 		}
 
 		return { allowed: true };

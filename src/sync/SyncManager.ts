@@ -560,10 +560,10 @@ export class SyncManager {
 	// did not touch, so a change made elsewhere to a different file survives
 	// untouched. Getting this vault current is the pull path's job.
 	//
-	// What differs by trigger is only how a large batch of deletions is treated.
-	// A person who pressed push is there to answer for it, whereas a background
-	// timer is not, so a bulk deletion waits for someone to look at it rather
-	// than being confirmed by a dialog nobody asked for.
+	// A large batch of deletions is confirmed the same way whatever started the
+	// push. Withholding them on an automatic push and telling the user to press
+	// Push instead only worked while that button was available, and it is
+	// disabled precisely when synchronization is on.
 	async performPush(trigger: PushTrigger = 'automatic'): Promise<void> {
 		// Nothing automatic runs while a push is in flight, however long it takes.
 		this.syncHoldUntil = Date.now() + POLL_HOLD_AFTER_PUSH_MS;
@@ -630,14 +630,15 @@ export class SyncManager {
 			// before it, so every absence is meaningless rather than intentional.
 			includeDeletions: trigger !== 'adopt',
 			userNamed: this.userNamed,
-			confirmDeletions: (paths) =>
-				trigger === 'manual'
-					? window.confirm(
-							`Sync will delete ${paths.length} file(s) from GitHub because they are no longer in this vault:\n\n` +
-								listForPrompt(paths) +
-								'\n\nIf this vault has not finished loading, cancel and try again.\n\nDelete them on GitHub?',
-						)
-					: false,
+			confirmDeletions: (paths, reason) =>
+				window.confirm(
+					`You are attempting to delete ${paths.length} file(s) from GitHub.\n\n` +
+						(reason === 'empty-index'
+							? 'This vault currently reports no files at all, which usually means it has not finished loading. Cancel unless you are certain.\n\n'
+							: '') +
+						listForPrompt(paths) +
+						'\n\nProceed?',
+				),
 		});
 
 		this.debug(`push trigger=${trigger}`);
@@ -650,12 +651,8 @@ export class SyncManager {
 
 		if (result.withheldDeletions.length) {
 			const held = result.withheldDeletions.length;
-			this.record('info', `${held} deletion(s) held back`);
-			new Notice(
-				trigger === 'manual'
-					? `GitSync: kept ${held} file(s) on GitHub. Nothing was deleted.`
-					: `GitSync: ${held} deletion(s) held back. Use Push in settings to send them.`,
-			);
+			this.record('info', `${held} deletion(s) cancelled`);
+			new Notice(`GitSync: kept ${held} file(s) on GitHub. Nothing was deleted.`);
 		}
 
 		if (result.deletedPaths.length) {
