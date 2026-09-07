@@ -169,17 +169,17 @@ export default class GitSyncPlugin extends Plugin {
 			(status, detail) => this.setStatus(status, detail),
 			() => this.updateStateReference(),
 			(message) => {
-				void this.handleCredentialsRejected(message);
+				void this.handleUnrecoverableError(message);
 			},
 		);
 	}
 
 	/**
-	 * GitHub refused the token. Nothing will work again until a person replaces
-	 * it, so synchronization stops instead of retrying every five seconds, and
-	 * the switch and the indicator both say why.
+	 * Nothing will work again until a person changes something, so
+	 * synchronization stops instead of retrying every five seconds, and the
+	 * switch and the indicator both say why.
 	 */
-	private async handleCredentialsRejected(message: string): Promise<void> {
+	private async handleUnrecoverableError(message: string): Promise<void> {
 		if (!this.settings.syncEnabled) return;
 		this.settings.syncEnabled = false;
 		await this.persistEverything();

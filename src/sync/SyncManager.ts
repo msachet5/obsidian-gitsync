@@ -56,16 +56,21 @@ function treeMapOf(remote: RemoteSnapshot): Record<string, string> {
 }
 
 /**
- * Whether GitHub rejected who we are, as opposed to refusing what we asked or
- * being unreachable. Only 401 qualifies: an expired, revoked or mistyped token.
+ * Whether this will still be broken on the next attempt, and every attempt
+ * after that, until a person changes something.
  *
- * Deliberately narrow. A 403 may be nothing worse than a rate limit, a 404 may
- * be a repository that was renamed back a minute later, 409 and 422 are the
- * ordinary branch-moved answers a push already retries, and status 0 is simply
- * no network. None of those are a reason to switch synchronization off.
+ * 401 is a token that expired, was revoked, or was mistyped. 404 is the same
+ * class of problem wearing a different number: GitHub answers a repository the
+ * token cannot see with "not found" rather than "forbidden", so a fine-grained
+ * token whose repository selection changed lands here, as does a mistyped
+ * owner or repository name.
+ *
+ * Everything else is left alone to retry. A 403 may be nothing worse than a
+ * rate limit, 409 and 422 are the ordinary branch-moved answers a push already
+ * handles, and status 0 is simply no network.
  */
-function rejectsCredentials(error: unknown): boolean {
-	return error instanceof GitHubApiError && error.status === 401;
+function requiresUserAction(error: unknown): boolean {
+	return error instanceof GitHubApiError && (error.status === 401 || error.status === 404);
 }
 
 function basename(path: string): string {
@@ -115,9 +120,9 @@ export class SyncManager {
 		private state: SyncStateData,
 		private setStatus: (status: SyncStatus, detail: string) => void,
 		private refreshUI: () => void,
-		/** Called when the credentials themselves are rejected, never for a
-		 *  problem that can clear on its own. */
-		private onCredentialsRejected: (message: string) => void = () => undefined,
+		/** Called for a problem that cannot clear on its own, never for one that
+		 *  can. */
+		private onRequiresAttention: (message: string) => void = () => undefined,
 	) {}
 
 	getState(): SyncStateData {
@@ -1366,7 +1371,8 @@ export class SyncManager {
 					message = `GitHub denied the request or rate limiting is active. — ${error.message}`;
 					break;
 				case 404:
-					message = `GitHub repository or branch was not found. — ${error.message}`;
+					message =
+						'Repository or branch not found. Check the owner and repository names, and that the token still has access to this repository. Sync has been turned off until you fix it.';
 					break;
 				case 409:
 				case 422:
@@ -1389,17 +1395,18 @@ export class SyncManager {
 		this.lastErrorMessage = message;
 		if (!isRepeat) {
 			this.record('error', message);
-			new Notice(`GitSync: ${message}`, rejectsCredentials(error) ? 15000 : undefined);
+			new Notice(`GitSync: ${message}`, requiresUserAction(error) ? 15000 : undefined);
 		}
 		this.refreshUI();
 
 		// Retrying is only worth doing for something that can clear on its own.
 		// Being offline clears when the network returns, a rate limit clears with
 		// time, and a moved branch clears on the next attempt. A rejected token
-		// clears when a person does something about it, so the plugin stops and
-		// says so rather than failing every five seconds until someone notices.
-		if (rejectsCredentials(error)) {
-			this.onCredentialsRejected(message);
+		// or an unreachable repository clears when a person does something about
+		// it, so the plugin stops and says so rather than failing every five
+		// seconds until someone notices.
+		if (requiresUserAction(error)) {
+			this.onRequiresAttention(message);
 		}
 	}
 
