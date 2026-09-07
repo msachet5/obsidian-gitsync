@@ -155,3 +155,6 @@ data.json
 
 # macOS
 .DS_Store
+
+# Local adoption snapshots
+stats-history.jsonl

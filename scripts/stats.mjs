@@ -10,7 +10,8 @@
  * Usage: npm run stats
  */
 
-import { readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { appendFileSync, readFileSync } from 'fs';
 
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 const PLUGIN_ID = manifest.id;
@@ -19,10 +20,28 @@ const REPO = 'msachet5/obsidian-ultisync';
 const STATS_URL =
 	'https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugin-stats.json';
 
+/**
+ * A token lifts the unauthenticated limit of 60 requests an hour, and the
+ * traffic endpoints require one outright. Borrowed from the gh CLI when the
+ * environment does not supply one, so this works with no setup.
+ */
+function githubToken() {
+	if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+	try {
+		return execFileSync('gh', ['auth', 'token'], {
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore'],
+		}).trim();
+	} catch {
+		return null;
+	}
+}
+
+const TOKEN = githubToken();
+
 async function getJson(url) {
 	const headers = { 'User-Agent': 'ultisync-stats' };
-	// A token lifts the unauthenticated GitHub limit of 60 requests an hour.
-	if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+	if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
 
 	const response = await fetch(url, { headers });
 	if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
@@ -65,6 +84,39 @@ async function directoryStats() {
 	}
 }
 
+/**
+ * Views, clones and referrers. GitHub keeps only the last 14 days of this and
+ * then discards it, so it is the one number here that is genuinely lost if
+ * nobody writes it down. Needs push access; anyone else gets a 403.
+ */
+async function trafficStats() {
+	console.log('\nTraffic (GitHub keeps 14 days only)');
+	try {
+		const [views, clones, referrers] = await Promise.all([
+			getJson(`https://api.github.com/repos/${REPO}/traffic/views`),
+			getJson(`https://api.github.com/repos/${REPO}/traffic/clones`),
+			getJson(`https://api.github.com/repos/${REPO}/traffic/popular/referrers`),
+		]);
+
+		line('views', `${views.count} (${views.uniques} unique)`);
+		line('clones', `${clones.count} (${clones.uniques} unique)`);
+
+		if (!referrers.length) {
+			line('referrers', 'none — nothing is linking here yet');
+		} else {
+			console.log('\n  where visitors came from');
+			for (const source of referrers) {
+				console.log(`    ${source.referrer.padEnd(24)} ${source.count} (${source.uniques} unique)`);
+			}
+		}
+		return { views: views.count, viewsUnique: views.uniques, clones: clones.count };
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		line('traffic', `unavailable (needs push access) — ${reason}`);
+		return null;
+	}
+}
+
 async function githubStats() {
 	console.log('\nGitHub');
 	const repo = await getJson(`https://api.github.com/repos/${REPO}`);
@@ -75,7 +127,7 @@ async function githubStats() {
 	const releases = await getJson(`https://api.github.com/repos/${REPO}/releases?per_page=100`);
 	if (!releases.length) {
 		line('releases', 'none published yet');
-		return;
+		return { stars: repo.stargazers_count, assetDownloads: 0 };
 	}
 
 	let total = 0;
@@ -85,13 +137,31 @@ async function githubStats() {
 		total += count;
 		console.log(`    ${release.tag_name.padEnd(12)} ${count.toLocaleString()}`);
 	}
-	line('\n  total', total.toLocaleString());
+	// BRAT fetches three files per install, so the headline figure overstates
+	// installs by roughly three to one.
+	console.log(`    ${'installs (approx)'.padEnd(12)} ~${Math.round(total / 3).toLocaleString()}`);
+
+	return { stars: repo.stargazers_count, assetDownloads: total };
 }
 
 console.log(`\n${manifest.name} — adoption report`);
 try {
 	await directoryStats();
-	await githubStats();
+	const github = await githubStats();
+	const traffic = await trafficStats();
+
+	// --snapshot appends one dated line so a series survives GitHub's 14-day
+	// window. Run it on a schedule and the history builds itself.
+	if (process.argv.includes('--snapshot')) {
+		const row = {
+			date: new Date().toISOString().slice(0, 10),
+			version: manifest.version,
+			...github,
+			...traffic,
+		};
+		appendFileSync('stats-history.jsonl', `${JSON.stringify(row)}\n`);
+		console.log('\nAppended to stats-history.jsonl');
+	}
 } catch (error) {
 	console.error(`\nFailed: ${error.message}`);
 	process.exitCode = 1;
