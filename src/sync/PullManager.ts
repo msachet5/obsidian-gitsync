@@ -1,4 +1,4 @@
-import { Platform, TFile, Vault } from 'obsidian';
+import { App, Platform, TFile, Vault } from 'obsidian';
 import { GitHubClient, RemoteSnapshot } from '../github/GitHubClient';
 import { UltiSyncSettings, SyncStateData, TrackedFile } from '../types';
 import {
@@ -28,10 +28,21 @@ const BATCH_SIZE = 4;
 
 export class PullManager {
 	constructor(
-		private vault: Vault,
+		private app: App,
 		private github: GitHubClient,
 		private settings: UltiSyncSettings,
 	) {}
+
+	private get vault(): Vault {
+		return this.app.vault;
+	}
+
+	// Every deletion in the plugin goes through here. FileManager.trashFile
+	// follows the vault's own "Deleted files" preference, so a file this plugin
+	// removes ends up wherever Obsidian would have put it.
+	private async trash(file: TFile): Promise<void> {
+		await this.app.fileManager.trashFile(file);
+	}
 
 	async applyRemoteChanges(
 		remote: RemoteSnapshot,
@@ -57,8 +68,8 @@ export class PullManager {
 
 			const file = this.vault.getAbstractFileByPath(path);
 			if (file instanceof TFile) {
-				await this.vault.trash(file, !this.settings.recycleBin);
-				trace.push(`${path}: found locally, moved to .trash`);
+				await this.trash(file);
+				trace.push(`${path}: found locally, moved to trash`);
 			} else {
 				trace.push(
 					`${path}: NOT found locally (getAbstractFileByPath returned ${
@@ -76,12 +87,15 @@ export class PullManager {
 	// Used once, when the user chooses GitHub as the starting point on a vault
 	// that already holds files. Unlike performInitialPull this does not refuse to
 	// overwrite, because the user has explicitly asked for the remote to win, but
-	// the versions it replaces go to .trash rather than being destroyed, and
-	// files that exist only locally are left completely alone.
+	// the versions it replaces are trashed rather than destroyed, and files that
+	// exist only locally are left completely alone.
+	//
+	// The confirmation is asked for asynchronously because it is a modal now,
+	// and a modal cannot answer before the frame it is opened in has ended.
 	async adoptRemote(
 		remote: RemoteSnapshot,
 		state: SyncStateData,
-		confirmOverwrite: (paths: string[]) => boolean,
+		confirmOverwrite: (paths: string[]) => Promise<boolean>,
 	): Promise<AdoptResult> {
 		if (this.settings.pullExtensions.length === 0) {
 			throw new Error('Select at least one pull extension first.');
@@ -102,14 +116,14 @@ export class PullManager {
 			}
 		}
 
-		if (differing.length && !confirmOverwrite(differing)) {
+		if (differing.length && !(await confirmOverwrite(differing))) {
 			return { pulled: 0, replaced: 0, cancelled: true };
 		}
 
 		for (const path of differing) {
 			const file = this.vault.getAbstractFileByPath(normalizePath(path));
 			if (file instanceof TFile) {
-				await this.vault.trash(file, !this.settings.recycleBin);
+				await this.trash(file);
 			}
 		}
 

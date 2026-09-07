@@ -104,10 +104,6 @@ export function migrate(raw: unknown): MigrationResult {
 			typeof rawSettings.syncEnabled === 'boolean'
 				? rawSettings.syncEnabled
 				: DEFAULT_SETTINGS.syncEnabled,
-		recycleBin:
-			typeof rawSettings.recycleBin === 'boolean'
-				? rawSettings.recycleBin
-				: DEFAULT_SETTINGS.recycleBin,
 		githubOwner: typeof rawSettings.githubOwner === 'string' ? rawSettings.githubOwner : '',
 		githubRepo: typeof rawSettings.githubRepo === 'string' ? rawSettings.githubRepo : '',
 		branch:

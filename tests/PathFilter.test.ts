@@ -30,8 +30,9 @@ describe('isSafeVaultPath', () => {
 });
 
 describe('isIgnoredPath', () => {
-	it('always ignores the trash and config folders', () => {
+	it('always ignores the trash, and the config folder once it is known', () => {
 		assert.equal(isIgnoredPath('.trash/old.md', []), true);
+		setConfigDir('.obsidian');
 		assert.equal(isIgnoredPath('.obsidian/workspace.json', []), true);
 	});
 

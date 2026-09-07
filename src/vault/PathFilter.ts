@@ -1,8 +1,10 @@
 /**
  * Obsidian's configuration folder is user-configurable, so its real name is
- * supplied once at load rather than assumed to be `.obsidian`.
+ * read from `Vault#configDir` and supplied here once at load rather than
+ * assumed. Nothing guesses a default: until onload sets it, the only always-
+ * ignored prefix is the vault trash.
  */
-let configDir = '.obsidian';
+let configDir = '';
 
 export function setConfigDir(dir: string): void {
 	const normalized = normalizePath(dir).trim();
@@ -11,7 +13,7 @@ export function setConfigDir(dir: string): void {
 
 /** Paths the plugin refuses to touch regardless of settings. */
 function alwaysIgnoredPrefixes(): string[] {
-	return ['.trash', configDir];
+	return configDir ? ['.trash', configDir] : ['.trash'];
 }
 
 /** Lowercases an extension and guarantees the leading dot. */

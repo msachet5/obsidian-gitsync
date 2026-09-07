@@ -3,7 +3,7 @@ import { SyncManager } from './sync/SyncManager';
 import { SCHEMA_VERSION, migrate } from './sync/Migrations';
 import { SyncStateStore, generateDeviceId } from './sync/SyncState';
 import { ConflictModal } from './ui/ConflictModal';
-import { ConfirmModal } from './ui/ConfirmModal';
+import { ConfirmModal, confirmWithModal } from './ui/ConfirmModal';
 import { CredentialDraft, SettingsTab } from './ui/SettingsTab';
 import { SetupCheckModal, SetupDecision } from './ui/SetupCheckModal';
 import { StatusBarController } from './ui/StatusBar';
@@ -164,7 +164,7 @@ export default class UltiSyncPlugin extends Plugin {
 
 	private createSyncManager(): SyncManager {
 		return new SyncManager(
-			this.app.vault,
+			this.app,
 			this.settings,
 			this.stateStore,
 			this.state,
@@ -240,7 +240,7 @@ export default class UltiSyncPlugin extends Plugin {
 
 	/** The settings tab redraws itself when the connection verdict changes. */
 	private refreshSettingsTab(): void {
-		this.settingsTab?.display();
+		this.settingsTab?.refresh();
 	}
 
 	/**
@@ -455,11 +455,13 @@ export default class UltiSyncPlugin extends Plugin {
 	private confirmReset(): void {
 		new ConfirmModal(
 			this.app,
-			'Reset all credentials and plugin settings?',
-			'You will need to re-enter the GitHub owner, repository and personal access token. Your notes are not touched and nothing is deleted from GitHub.',
-			'Proceed',
-			() => {
-				void this.resetEverything();
+			{
+				title: 'Reset all credentials and plugin settings?',
+				body: 'You will need to re-enter the GitHub owner, repository and personal access token. Your notes are not touched and nothing is deleted from GitHub.',
+				confirmLabel: 'Proceed',
+			},
+			(confirmed) => {
+				if (confirmed) void this.resetEverything();
 			},
 		).open();
 	}
@@ -601,20 +603,21 @@ export default class UltiSyncPlugin extends Plugin {
 
 	// Throws away this vault's copy of the synced files and downloads them again.
 	// This is the only action in the plugin that destroys local work on purpose,
-	// so it is confirmed explicitly and everything it removes goes to .trash.
+	// so it is confirmed explicitly and everything it removes is trashed rather
+	// than deleted outright.
 	async resetSyncState(): Promise<void> {
 		const managed = this.managedFiles();
-		const keepCopies = this.settings.recycleBin;
 
-		const confirmed = window.confirm(
-			'Reset and re-pull from GitHub?\n\n' +
-				`${managed.length} file(s) matching your Pull or Push extensions will be removed and downloaded again from GitHub. Ignored paths are left alone.\n\n` +
-				(keepCopies
-					? "Recycle bin is on, so the current copies go to the vault's .trash folder.\n\n"
-					: 'Recycle bin is off, so the current copies go to your system trash.\n\n') +
-				'Either way, a local change that was never pushed does not come back from GitHub.\n\n' +
-				'GitHub itself is not modified.\n\nContinue?',
-		);
+		const confirmed = await confirmWithModal(this.app, {
+			title: 'Reset and re-pull from GitHub?',
+			body: [
+				`${managed.length} file(s) matching your Pull or Push extensions will be removed and downloaded again from GitHub. Ignored paths are left alone.`,
+				"The current copies are trashed, following Obsidian's own setting for deleted files under Files and links.",
+				'A local change that was never pushed does not come back from GitHub.',
+				'GitHub itself is not modified.',
+			],
+			confirmLabel: 'Reset and re-pull',
+		});
 		if (!confirmed) {
 			new Notice('UltiSync: reset cancelled. Nothing was changed.');
 			return;
@@ -625,11 +628,11 @@ export default class UltiSyncPlugin extends Plugin {
 
 		try {
 			for (const file of managed) {
-				// Same rule as every other deletion in the plugin: the recycle bin
-				// chooses between the vault's own .trash and the system one.
-				// Nothing here deletes outright, because a file that was edited
+				// Same rule as every other deletion in the plugin: trashFile puts
+				// the file wherever the vault's "Deleted files" preference says.
+				// Nothing here bypasses that, because a file that was edited
 				// locally and never pushed does not come back from GitHub.
-				await this.app.vault.trash(file, !keepCopies);
+				await this.app.fileManager.trashFile(file);
 			}
 		} catch (error) {
 			console.error('[UltiSync]', error);

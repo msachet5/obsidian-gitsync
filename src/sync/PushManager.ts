@@ -39,8 +39,11 @@ export interface PushOptions {
 	 * Asked before a batch of deletions is sent. "empty-index" is the more
 	 * alarming case: the vault reports nothing at all, which usually means it
 	 * has not finished loading rather than that everything was deleted.
+	 *
+	 * Asynchronous because the answer comes from a modal, which cannot reply
+	 * before the frame it was opened in has ended.
 	 */
-	confirmDeletions?: (paths: string[], reason: 'bulk' | 'empty-index') => boolean;
+	confirmDeletions?: (paths: string[], reason: 'bulk' | 'empty-index') => Promise<boolean>;
 }
 
 export interface PushResult {
@@ -78,7 +81,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 function backoffFor(attempt: number): number {
-	return PUSH_RETRY_BACKOFF_MS[attempt - 1] ?? PUSH_RETRY_BACKOFF_MS.at(-1) ?? 10000;
+	const last = PUSH_RETRY_BACKOFF_MS.length - 1;
+	return PUSH_RETRY_BACKOFF_MS[attempt - 1] ?? PUSH_RETRY_BACKOFF_MS[last] ?? 10000;
 }
 
 function isBranchMovedError(error: unknown): boolean {
@@ -473,7 +477,7 @@ export class PushManager {
 		}
 
 		if (candidateDeletions.length) {
-			const verdict = this.screenDeletions(candidateDeletions, state, options);
+			const verdict = await this.screenDeletions(candidateDeletions, state, options);
 			trace.push(
 				`screenDeletions candidates=[${candidateDeletions.join(', ')}] allowed=${
 					verdict.allowed
@@ -558,11 +562,11 @@ export class PushManager {
 	// This guards what this device sends, not what it accepts: deletions
 	// arriving from the repository are applied on their own terms, however many
 	// there are, because they were already someone's deliberate decision.
-	private screenDeletions(
+	private async screenDeletions(
 		paths: string[],
 		state: SyncStateData,
 		options: PushOptions,
-	): { allowed: boolean } {
+	): Promise<{ allowed: boolean }> {
 		if (!options.includeDeletions) {
 			return { allowed: false };
 		}
@@ -573,11 +577,11 @@ export class PushManager {
 			.getFiles()
 			.filter((file) => matchesExtensions(file.path, this.settings.pushExtensions)).length;
 		if (localCount === 0 && Object.keys(state.trackedFiles).length > 0) {
-			return { allowed: options.confirmDeletions?.(paths, 'empty-index') ?? false };
+			return { allowed: (await options.confirmDeletions?.(paths, 'empty-index')) ?? false };
 		}
 
 		if (paths.length > BULK_DELETION_THRESHOLD) {
-			return { allowed: options.confirmDeletions?.(paths, 'bulk') ?? false };
+			return { allowed: (await options.confirmDeletions?.(paths, 'bulk')) ?? false };
 		}
 
 		return { allowed: true };

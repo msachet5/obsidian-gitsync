@@ -128,8 +128,14 @@
   50%      { opacity: 0.3; }
 }
 
+/* Mirrors the selectors of the pulsing rules above, so this override wins on
+   source order at equal specificity rather than by force. */
 @media (prefers-reduced-motion: reduce) {
-  .ultisync-panel .ghs-dot { animation: none !important; }
+  .ultisync-panel .ghs-syncing .ghs-dot,
+  .ultisync-panel .ghs-pulling .ghs-dot,
+  .ultisync-panel .ghs-pushing .ghs-dot {
+    animation: none;
+  }
 }
 
 /* --- facts -------------------------------------------------------------- */
@@ -436,4 +442,28 @@
 
 .ultisync-box .setting-item:last-child {
   border-bottom: none;
+}
+
+/* Rows that are a block of custom UI rather than a name/description/control
+   triple: the header, the save row and the extension grids. The definition
+   keeps the name and description for settings search; only the layout goes. */
+.setting-item.ultisync-block {
+  display: block;
+  border-top: none;
+  padding-top: 0;
+}
+
+/* --- confirmation modal ------------------------------------------------- */
+
+.ultisync-confirm-list {
+  margin: 0 0 var(--size-4-3);
+  padding-left: var(--size-4-5);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.ultisync-confirm-list li {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  word-break: break-all;
 }

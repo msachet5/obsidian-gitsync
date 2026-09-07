@@ -14,8 +14,6 @@ export const SELF_WRITE_GRACE_MS = 2000;
 export interface UltiSyncSettings {
 	/** Master switch. Off until the setup check reaches a conclusion. */
 	syncEnabled: boolean;
-	/** Keep deleted files in the vault's own .trash instead of the system one. */
-	recycleBin: boolean;
 	githubOwner: string;
 	githubRepo: string;
 	branch: string;
@@ -134,7 +132,6 @@ export const MAX_BLOB_BYTES = 100 * 1024 * 1024;
 
 export const DEFAULT_SETTINGS: UltiSyncSettings = {
 	syncEnabled: true,
-	recycleBin: false,
 	githubOwner: '',
 	githubRepo: '',
 	branch: 'main',

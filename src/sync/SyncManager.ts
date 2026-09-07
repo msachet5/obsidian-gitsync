@@ -1,4 +1,4 @@
-import { Notice, TFile, Vault } from 'obsidian';
+import { App, Notice, TFile, Vault } from 'obsidian';
 import {
 	GitHubApiError,
 	GitHubClient,
@@ -29,6 +29,7 @@ import {
 	normalizePath,
 } from '../vault/PathFilter';
 import { base64ToArrayBuffer, gitBlobSha, sha256 } from '../vault/VaultScanner';
+import { confirmWithModal } from '../ui/ConfirmModal';
 import { ChangeDetector } from './ChangeDetector';
 import { ConflictDetector, IdenticalPaths } from './ConflictDetector';
 import { attemptMerge } from './MergeAttempt';
@@ -95,6 +96,7 @@ function basename(path: string): string {
 	return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
+/** Bullets a path list for a Notice, which renders plain text only. */
 function listForPrompt(paths: string[], shown = 12): string {
 	const list = paths
 		.slice(0, shown)
@@ -136,7 +138,7 @@ export class SyncManager {
 	private rateLimitStreak = 0;
 
 	constructor(
-		private vault: Vault,
+		private app: App,
 		private settings: UltiSyncSettings,
 		private stateStore: SyncStateStore,
 		private state: SyncStateData,
@@ -146,6 +148,10 @@ export class SyncManager {
 		 *  can. */
 		private onRequiresAttention: (message: string) => void = () => undefined,
 	) {}
+
+	private get vault(): Vault {
+		return this.app.vault;
+	}
 
 	getState(): SyncStateData {
 		return this.state;
@@ -353,14 +359,17 @@ export class SyncManager {
 			const commit = await github.getCommit(ref.object.sha);
 			const remote = await github.readTreeSnapshot(commit.sha, commit.tree.sha);
 
-			const pull = new PullManager(this.vault, github, this.settings);
+			const pull = new PullManager(this.app, github, this.settings);
 			const result = await pull.adoptRemote(remote, this.state, (paths) =>
-				window.confirm(
-					`${paths.length} file(s) in this vault differ from GitHub and will be replaced.\n\n` +
-						`The current versions are moved to the vault's .trash folder first:\n\n` +
-						listForPrompt(paths) +
-						'\n\nReplace them?',
-				),
+				confirmWithModal(this.app, {
+					title: 'Replace local files with the GitHub versions?',
+					body: [
+						`${paths.length} file(s) in this vault differ from GitHub and will be replaced.`,
+						"The current versions are trashed first, following Obsidian's own setting for deleted files.",
+					],
+					list: paths,
+					confirmLabel: 'Replace',
+				}),
 			);
 
 			if (result.cancelled) {
@@ -403,7 +412,7 @@ export class SyncManager {
 			const commit = await github.getCommit(ref.object.sha);
 			const remote = await github.readTreeSnapshot(commit.sha, commit.tree.sha);
 
-			const pull = new PullManager(this.vault, github, this.settings);
+			const pull = new PullManager(this.app, github, this.settings);
 			const result = await pull.performInitialPull(remote, this.state, overwriteExisting);
 
 			const now = new Date().toISOString();
@@ -659,14 +668,18 @@ export class SyncManager {
 			includeDeletions: trigger !== 'adopt',
 			userNamed: this.userNamed,
 			confirmDeletions: (paths, reason) =>
-				window.confirm(
-					`You are attempting to delete ${paths.length} file(s) from GitHub.\n\n` +
-						(reason === 'empty-index'
-							? 'This vault currently reports no files at all, which usually means it has not finished loading. Cancel unless you are certain.\n\n'
-							: '') +
-						listForPrompt(paths) +
-						'\n\nProceed?',
-				),
+				confirmWithModal(this.app, {
+					title: `Delete ${paths.length} file(s) from GitHub?`,
+					body:
+						reason === 'empty-index'
+							? [
+									`You are attempting to delete ${paths.length} file(s) from GitHub.`,
+									'This vault currently reports no files at all, which usually means it has not finished loading. Cancel unless you are certain.',
+								]
+							: `You are attempting to delete ${paths.length} file(s) from GitHub.`,
+					list: paths,
+					confirmLabel: 'Delete',
+				}),
 		});
 
 		this.debug(`push trigger=${trigger}`);
@@ -921,7 +934,7 @@ export class SyncManager {
 		);
 
 		this.markSelfWrite(...safeRemoteChanged, ...safeRemoteDeleted);
-		const pull = new PullManager(this.vault, github, this.settings);
+		const pull = new PullManager(this.app, github, this.settings);
 		const pullResult = await pull.applyRemoteChanges(
 			remote,
 			this.state,
@@ -1278,7 +1291,7 @@ export class SyncManager {
 		const ref = await github.getBranchReference();
 		const commit = await github.getCommit(ref.object.sha);
 		const remote = await github.readTreeSnapshot(ref.object.sha, commit.tree.sha);
-		const pull = new PullManager(this.vault, github, this.settings);
+		const pull = new PullManager(this.app, github, this.settings);
 
 		if (remote.entries.has(path)) {
 			await pull.applyRemoteChanges(remote, this.state, new Set([path]), new Set());
@@ -1287,11 +1300,14 @@ export class SyncManager {
 			// file, which is worth asking about explicitly.
 			const localFile = this.vault.getAbstractFileByPath(path);
 			if (localFile instanceof TFile) {
-				const proceed = window.confirm(
-					`"${path}" does not exist on GitHub.\n\n` +
-						`Keeping the remote version means deleting your local copy. It will be moved to the vault's .trash folder.\n\n` +
-						'Delete the local file?',
-				);
+				const proceed = await confirmWithModal(this.app, {
+					title: 'Delete the local file?',
+					body: [
+						`"${path}" does not exist on GitHub.`,
+						"Keeping the remote version means deleting your local copy. It is trashed, following Obsidian's own setting for deleted files.",
+					],
+					confirmLabel: 'Delete',
+				});
 				if (!proceed) {
 					new Notice('UltiSync: kept the local file. Conflict left unresolved.');
 					return;

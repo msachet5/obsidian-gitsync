@@ -31,7 +31,6 @@ describe('migrate', () => {
 
 	it('fills in a setting the older build did not have', () => {
 		const { settings } = migrate({ settings: { githubOwner: 'me' }, state: {} });
-		assert.equal(typeof settings.recycleBin, 'boolean');
 		assert.equal(typeof settings.syncEnabled, 'boolean');
 	});
 

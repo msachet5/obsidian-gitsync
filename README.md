@@ -253,8 +253,10 @@ that was removed.
 Deletions are applied only when GitHub reports the remote commit as `ahead` of
 the last synced commit. A stale read reads as `behind`, and nothing is deleted.
 
-Deletions propagate in both directions. Removed files go to the vault's
-`.trash` rather than being destroyed. Three guards limit the blast radius:
+Deletions propagate in both directions. Removed files are trashed rather than
+destroyed outright: the plugin hands them to Obsidian, which puts them wherever
+your **Deleted files** preference under **Files and links** says. Three guards
+limit the blast radius:
 
 - A push is refused when the vault reports no eligible files while the tracking
   table is populated. That indicates an index that has not finished building,
