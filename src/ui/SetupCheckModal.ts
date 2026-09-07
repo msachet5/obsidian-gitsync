@@ -114,7 +114,7 @@ export class SetupCheckModal extends Modal {
 
 		for (const [label, paths] of groups) {
 			if (!paths.length) continue;
-			const details = this.contentEl.createEl('details', { cls: 'gitsync-file-list' });
+			const details = this.contentEl.createEl('details', { cls: 'ultisync-file-list' });
 			details.createEl('summary', { text: `${label} (${paths.length})` });
 			const list = details.createEl('ul');
 			for (const path of paths.slice(0, 50)) {

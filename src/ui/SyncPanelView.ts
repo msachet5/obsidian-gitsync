@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import { ActivityEntry, ActivityKind, SyncStateData, SyncStatus } from '../types';
 
-export const SYNC_PANEL_VIEW_TYPE = 'gitsync-panel';
+export const SYNC_PANEL_VIEW_TYPE = 'ultisync-panel';
 
 /** What the panel needs from the plugin. */
 export interface PanelHost {
@@ -72,7 +72,7 @@ export class SyncPanelView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'GitSync';
+		return 'UltiSync';
 	}
 
 	getIcon(): string {
@@ -93,7 +93,7 @@ export class SyncPanelView extends ItemView {
 	render(): void {
 		const root = this.contentEl;
 		root.empty();
-		root.addClass('gitsync-panel');
+		root.addClass('ultisync-panel');
 		this.timeNodes = [];
 
 		const { status, detail } = this.host.getStatus();
@@ -109,8 +109,8 @@ export class SyncPanelView extends ItemView {
 		// own competing with the one action that is ever urgent here.
 		const gear = heading.createEl('button', { cls: 'ghs-icon-button' });
 		setIcon(gear, 'settings');
-		gear.setAttribute('aria-label', 'Open GitSync settings');
-		gear.setAttribute('title', 'Open GitSync settings');
+		gear.setAttribute('aria-label', 'Open UltiSync settings');
+		gear.setAttribute('title', 'Open UltiSync settings');
 		gear.addEventListener('click', () => this.host.openSettings());
 		card.createDiv({ cls: 'ghs-status-detail', text: detail || copy.hint });
 
@@ -133,11 +133,11 @@ export class SyncPanelView extends ItemView {
 			const warn = root.createDiv({ cls: 'ghs-card ghs-warn ghs-setup' });
 			warn.setAttribute('role', 'button');
 			warn.setAttribute('tabindex', '0');
-			warn.setAttribute('aria-label', 'Set up GitSync');
-			warn.setAttribute('title', 'Set up GitSync');
+			warn.setAttribute('aria-label', 'Set up UltiSync');
+			warn.setAttribute('title', 'Set up UltiSync');
 			warn.createDiv({
 				cls: 'ghs-warn-text',
-				text: 'Not linked to GitHub yet. Click here to set up GitSync.',
+				text: 'Not linked to GitHub yet. Click here to set up UltiSync.',
 			});
 
 			const openSettings = (): void => this.host.openSettings();

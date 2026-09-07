@@ -1,6 +1,7 @@
 import { Plugin } from 'obsidian';
+import { settingsForDisk } from '../TokenStore';
 import { devicePlatform } from '../platform';
-import { GitSyncSettings, PersistedData, SyncStateData } from '../types';
+import { UltiSyncSettings, PersistedData, SyncStateData } from '../types';
 import { SCHEMA_VERSION, migrate } from './Migrations';
 
 /** A short, locally generated id. Never derived from hardware identifiers. */
@@ -16,7 +17,7 @@ export function generateDeviceId(): string {
 export class SyncStateStore {
 	constructor(
 		private plugin: Plugin,
-		private getSettings: () => GitSyncSettings,
+		private getSettings: () => UltiSyncSettings,
 	) {}
 
 	async load(): Promise<SyncStateData> {
@@ -31,7 +32,7 @@ export class SyncStateStore {
 	async save(state: SyncStateData): Promise<void> {
 		await this.plugin.saveData({
 			schemaVersion: SCHEMA_VERSION,
-			settings: this.getSettings(),
+			settings: settingsForDisk(this.plugin.app, this.getSettings()),
 			state,
 		} satisfies PersistedData);
 	}

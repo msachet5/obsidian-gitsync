@@ -34,8 +34,8 @@ export class ConflictModal extends Modal {
 		});
 
 		for (const conflict of conflicts) {
-			const container = contentEl.createDiv('gitsync-conflict');
-			container.createDiv({ cls: 'gitsync-conflict-path', text: conflict.path });
+			const container = contentEl.createDiv('ultisync-conflict');
+			container.createDiv({ cls: 'ultisync-conflict-path', text: conflict.path });
 			container.createEl('small', {
 				text: conflict.remoteExists
 					? `Remote version: ${conflict.remoteSha ?? 'unknown'}`

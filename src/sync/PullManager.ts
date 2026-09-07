@@ -1,6 +1,6 @@
 import { Platform, TFile, Vault } from 'obsidian';
 import { GitHubClient, RemoteSnapshot } from '../github/GitHubClient';
-import { GitSyncSettings, SyncStateData, TrackedFile } from '../types';
+import { UltiSyncSettings, SyncStateData, TrackedFile } from '../types';
 import {
 	isIgnoredPath,
 	isSafeVaultPath,
@@ -30,7 +30,7 @@ export class PullManager {
 	constructor(
 		private vault: Vault,
 		private github: GitHubClient,
-		private settings: GitSyncSettings,
+		private settings: UltiSyncSettings,
 	) {}
 
 	async applyRemoteChanges(

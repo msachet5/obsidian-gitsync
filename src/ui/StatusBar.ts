@@ -2,15 +2,15 @@ import { Plugin, Workspace } from 'obsidian';
 import { SyncStatus } from '../types';
 
 const LABELS: Record<SyncStatus, string> = {
-	setup: '⚙ GitSync setup needed',
-	off: '○ GitSync off',
+	setup: '⚙ UltiSync setup needed',
+	off: '○ UltiSync off',
 	synced: '✓ Synced',
 	pending: '↑ Pending',
 	syncing: '↻ Syncing',
 	pulling: '↓ Pulling',
 	pushing: '↑ Pushing',
 	conflict: '⚠ Conflict',
-	error: '✕ GitSync not working',
+	error: '✕ UltiSync not working',
 };
 
 export class StatusBarController {
@@ -23,8 +23,8 @@ export class StatusBarController {
 		onLayoutReady: () => void,
 	) {
 		this.item = plugin.addStatusBarItem();
-		this.item.addClass('gitsync-status');
-		this.item.setAttribute('aria-label', 'GitSync status');
+		this.item.addClass('ultisync-status');
+		this.item.setAttribute('aria-label', 'UltiSync status');
 		this.item.addEventListener('click', onClick);
 
 		// Deliberately not seeded with a status here. Claiming "Synced" before

@@ -14,13 +14,13 @@ import { readFileSync } from 'fs';
 
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 const PLUGIN_ID = manifest.id;
-const REPO = 'msachet5/obsidian-gitsync';
+const REPO = 'msachet5/obsidian-ultisync';
 
 const STATS_URL =
 	'https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugin-stats.json';
 
 async function getJson(url) {
-	const headers = { 'User-Agent': 'gitsync-stats' };
+	const headers = { 'User-Agent': 'ultisync-stats' };
 	// A token lifts the unauthenticated GitHub limit of 60 requests an hour.
 	if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
 

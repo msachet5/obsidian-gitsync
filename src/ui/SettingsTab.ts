@@ -1,22 +1,23 @@
 import { App, ButtonComponent, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import {
 	ConnectionState,
-	GitSyncSettings,
+	UltiSyncSettings,
 	PUSH_DELAY_SECONDS,
 	SUPPORTED_EXTENSIONS,
 	SyncStatus,
 } from '../types';
+import { usesSecretStorage } from '../TokenStore';
 import { normalizeExtension, normalizePath } from '../vault/PathFilter';
 
 /** The credential fields, which are edited as a draft and applied by Save. */
 export type CredentialDraft = Pick<
-	GitSyncSettings,
+	UltiSyncSettings,
 	'githubOwner' | 'githubRepo' | 'branch' | 'token'
 >;
 
 /** What the settings tab needs from the plugin, kept narrow deliberately. */
 export interface SettingsHost {
-	settings: GitSyncSettings;
+	settings: UltiSyncSettings;
 	saveSettings(): Promise<void>;
 	/** Persists the credentials, then runs the setup check against the repo. */
 	applyCredentials(draft: CredentialDraft): Promise<void>;
@@ -81,8 +82,31 @@ export class SettingsTab extends PluginSettingTab {
 		);
 	}
 
+	/**
+	 * Says where the token actually ends up, which differs by Obsidian version.
+	 * Somebody deciding how much to trust this field is entitled to know that
+	 * without reading the source, and "never logged" on its own reads as a
+	 * stronger promise than it is.
+	 */
+	private tokenStorageNote(): string {
+		const scope =
+			'Fine-grained token limited to this repository, with Contents read and write and nothing else.';
+		const revoke = 'You can revoke it on GitHub at any time.';
+
+		if (usesSecretStorage(this.app)) {
+			return `${scope} It is held in Obsidian's secret storage for this vault, not in the plugin's data file. ${revoke}`;
+		}
+
+		const path = `${this.app.vault.configDir}/plugins/ultisync/data.json`;
+		return (
+			`${scope} This version of Obsidian has no secret storage, so it is stored in plain text at ${path}. ` +
+			'The plugin never syncs that folder, but anything that copies your whole vault — iCloud, Dropbox, Obsidian Sync, a backup — copies the token with it. ' +
+			revoke
+		);
+	}
+
 	private renderHeader(containerEl: HTMLElement): void {
-		const header = containerEl.createDiv({ cls: 'gitsync-header' });
+		const header = containerEl.createDiv({ cls: 'ultisync-header' });
 
 		const state = this.host.getConnectionState();
 		const copy: Record<ConnectionState, { text: string; tone: string }> = {
@@ -93,11 +117,11 @@ export class SettingsTab extends PluginSettingTab {
 		};
 		const { text, tone } = copy[state];
 
-		const status = header.createDiv({ cls: 'gitsync-conn' });
-		status.createSpan({ cls: `gitsync-dot gitsync-dot-${tone}` });
+		const status = header.createDiv({ cls: 'ultisync-conn' });
+		status.createSpan({ cls: `ultisync-dot ultisync-dot-${tone}` });
 		status.createSpan({ text });
 
-		const reset = header.createEl('button', { cls: 'gitsync-reset' });
+		const reset = header.createEl('button', { cls: 'ultisync-reset' });
 		setIcon(reset, 'rotate-ccw');
 		reset.setAttribute('aria-label', 'Reset all credentials and plugin settings');
 		reset.setAttribute('title', 'Reset all credentials and plugin settings');
@@ -118,7 +142,7 @@ export class SettingsTab extends PluginSettingTab {
 
 		// Two engines writing the same files will each see the other's writes as
 		// someone else's edits, which is exactly how conflicts are manufactured.
-		const caution = containerEl.createDiv({ cls: 'gitsync-caution' });
+		const caution = containerEl.createDiv({ cls: 'ultisync-caution' });
 		caution.createEl('strong', { text: 'One sync engine at a time. ' });
 		caution.createSpan({
 			text: 'If this vault is also synced by Obsidian Sync, iCloud, Dropbox or OneDrive, the two will overwrite each other and produce conflicts. Turn the others off for this vault.',
@@ -144,12 +168,12 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	private setDimmed(el: HTMLElement, dimmed: boolean): void {
-		el.toggleClass('gitsync-dimmed', dimmed);
+		el.toggleClass('ultisync-dimmed', dimmed);
 		el.setAttribute('aria-disabled', String(dimmed));
 	}
 
 	private renderCredentials(parent: HTMLElement): void {
-		const containerEl = parent.createDiv({ cls: 'gitsync-box' });
+		const containerEl = parent.createDiv({ cls: 'ultisync-box' });
 		new Setting(containerEl).setName('GitHub').setHeading();
 
 		new Setting(containerEl)
@@ -190,9 +214,7 @@ export class SettingsTab extends PluginSettingTab {
 
 		const token = new Setting(containerEl)
 			.setName('Personal access token')
-			.setDesc(
-				'Fine-grained token limited to this repository with Contents read/write permission. The token is never logged.',
-			)
+			.setDesc(this.tokenStorageNote())
 			.addText((text) => {
 				text.inputEl.type = 'password';
 				text
@@ -205,7 +227,7 @@ export class SettingsTab extends PluginSettingTab {
 			});
 		this.renderTokenHelp(token.descEl);
 
-		const saveRow = containerEl.createDiv({ cls: 'gitsync-save-row' });
+		const saveRow = containerEl.createDiv({ cls: 'ultisync-save-row' });
 		this.saveButton = new ButtonComponent(saveRow).onClick(async () => {
 			if (this.saving || !this.allFieldsFilled()) return;
 			this.saving = true;
@@ -241,7 +263,7 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	private renderTokenHelp(containerEl: HTMLElement): void {
-		const details = containerEl.createEl('details', { cls: 'gitsync-help' });
+		const details = containerEl.createEl('details', { cls: 'ultisync-help' });
 		details.createEl('summary', { text: 'How to get the PAT' });
 
 		const list = details.createEl('ol');
@@ -267,7 +289,7 @@ export class SettingsTab extends PluginSettingTab {
 				}),
 			);
 
-		const details = sync.descEl.createEl('details', { cls: 'gitsync-help' });
+		const details = sync.descEl.createEl('details', { cls: 'ultisync-help' });
 		details.createEl('summary', { text: 'How syncing works' });
 		details.createEl('p', {
 			text: `A push goes out ${PUSH_DELAY_SECONDS} seconds after your last edit, and the timer restarts on every further edit.`,
@@ -278,6 +300,14 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	private renderExtensions(containerEl: HTMLElement): void {
+		// Said once, above both pickers, because the cost of turning on media is
+		// not obvious from a checkbox and is not reversible once it is in history.
+		containerEl.createEl('p', {
+			cls: 'ultisync-extensions-note',
+			text:
+				'Git keeps every version of every file forever. Text is cheap; images, audio and video are not, and cannot be removed later without rewriting history. GitHub blocks any single file over 100 MB and recommends keeping repositories under 1 GB.',
+		});
+
 		new Setting(containerEl).setName('Pull extensions').setHeading();
 		containerEl.createEl('p', {
 			text: this.host.settings.pullExtensions.length
@@ -317,7 +347,7 @@ export class SettingsTab extends PluginSettingTab {
 
 	private renderIgnoredPaths(containerEl: HTMLElement): void {
 		new Setting(containerEl)
-			.setClass('gitsync-section-gap')
+			.setClass('ultisync-section-gap')
 			.setName('Ignored paths')
 			.setHeading();
 		new Setting(containerEl)
@@ -339,7 +369,7 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	private renderDangerZone(containerEl: HTMLElement): void {
-		const zone = containerEl.createDiv({ cls: 'gitsync-danger-zone' });
+		const zone = containerEl.createDiv({ cls: 'ultisync-danger-zone' });
 		new Setting(zone).setName('Danger zone').setHeading();
 
 		const syncing = this.host.settings.syncEnabled;
@@ -390,7 +420,7 @@ export class SettingsTab extends PluginSettingTab {
 
 	private renderDevice(containerEl: HTMLElement): void {
 		new Setting(containerEl)
-			.setClass('gitsync-section-gap')
+			.setClass('ultisync-section-gap')
 			.setName('Device')
 			.setHeading();
 		new Setting(containerEl)
@@ -409,7 +439,7 @@ export class SettingsTab extends PluginSettingTab {
 	): void {
 		const normalizedSelected = selected.map(normalizeExtension);
 
-		const controls = containerEl.createDiv('gitsync-extension-controls');
+		const controls = containerEl.createDiv('ultisync-extension-controls');
 		controls.createEl('button', { text: 'Select all' }).addEventListener('click', () => {
 			void onChange([...SUPPORTED_EXTENSIONS]);
 			this.display();
@@ -419,7 +449,7 @@ export class SettingsTab extends PluginSettingTab {
 			this.display();
 		});
 
-		const grid = containerEl.createDiv('gitsync-extension-grid');
+		const grid = containerEl.createDiv('ultisync-extension-grid');
 		for (const extension of SUPPORTED_EXTENSIONS) {
 			const label = grid.createEl('label');
 			const input = label.createEl('input', { type: 'checkbox' });

@@ -3,6 +3,8 @@ import {
 	GitHubApiError,
 	GitHubClient,
 	RemoteSnapshot,
+	isRateLimited,
+	rateLimitDelayMs,
 } from '../github/GitHubClient';
 import {
 	ACTIVITY_LIMIT,
@@ -10,7 +12,8 @@ import {
 	ActivityKind,
 	ConflictRecord,
 	EMPTY_BLOB_SHA,
-	GitSyncSettings,
+	UltiSyncSettings,
+	LARGE_FILE_WARN_BYTES,
 	POLL_HOLD_AFTER_PUSH_MS,
 	PULL_INTERVAL_MS,
 	PUSH_DELAY_SECONDS,
@@ -36,6 +39,9 @@ import { ProgressCallback, SetupCheck, SetupCheckResult } from './SetupCheck';
 import { SyncStateStore } from './SyncState';
 
 const DEBUG_LOG_LIMIT = 200;
+
+/** Ceiling on a rate-limit hold. The hourly budget always resets within this. */
+const MAX_RATE_LIMIT_HOLD_MS = 60 * 60 * 1000;
 
 /** Waits between asking GitHub whether it has caught up with our own push. */
 const CONFIRM_BACKOFF_MS = [0, 300, 600, 1200, 2400, 4800];
@@ -71,6 +77,17 @@ function treeMapOf(remote: RemoteSnapshot): Record<string, string> {
  */
 function requiresUserAction(error: unknown): boolean {
 	return error instanceof GitHubApiError && (error.status === 401 || error.status === 404);
+}
+
+/** A clock time, for telling someone when a wait ends. */
+function clockTime(at: number): string {
+	const date = new Date(at);
+	const pad = (value: number): string => value.toString().padStart(2, '0');
+	return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function megabytes(bytes: number): string {
+	return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
 
 function basename(path: string): string {
@@ -113,9 +130,14 @@ export class SyncManager {
 	// limit repeats on every poll, and a notice each time would be unusable.
 	private lastErrorMessage: string | null = null;
 
+	// Consecutive rate-limit refusals. GitHub asks for an exponentially
+	// increasing wait when a limit keeps being hit, so each one in a row doubles
+	// the hold. Cleared by anything that succeeds.
+	private rateLimitStreak = 0;
+
 	constructor(
 		private vault: Vault,
-		private settings: GitSyncSettings,
+		private settings: UltiSyncSettings,
 		private stateStore: SyncStateStore,
 		private state: SyncStateData,
 		private setStatus: (status: SyncStatus, detail: string) => void,
@@ -307,7 +329,7 @@ export class SyncManager {
 			await this.stateStore.save(this.state);
 
 			await this.performPush('adopt');
-			new Notice('GitSync: this vault is now the starting point.');
+			new Notice('UltiSync: this vault is now the starting point.');
 		} catch (error) {
 			this.state.lastSyncedCommit = null;
 			this.state.lastSyncedTree = {};
@@ -342,7 +364,7 @@ export class SyncManager {
 			);
 
 			if (result.cancelled) {
-				new Notice('GitSync: cancelled. Nothing was changed.');
+				new Notice('UltiSync: cancelled. Nothing was changed.');
 				this.setStatus('pending', 'No starting point chosen yet.');
 				return;
 			}
@@ -356,7 +378,7 @@ export class SyncManager {
 
 			this.dirty = false;
 			this.setStatus('synced', `Downloaded ${result.pulled} file(s).`);
-			new Notice(`GitSync: downloaded ${result.pulled} file(s) from GitHub.`);
+			new Notice(`UltiSync: downloaded ${result.pulled} file(s) from GitHub.`);
 			this.refreshUI();
 		} catch (error) {
 			this.state.lastSyncedCommit = null;
@@ -394,7 +416,7 @@ export class SyncManager {
 			this.dirty = false;
 			this.setStatus('synced', `Initial pull complete: ${result.pulled} file(s).`);
 			new Notice(
-				`GitSync: pulled ${result.pulled} file(s).` +
+				`UltiSync: pulled ${result.pulled} file(s).` +
 					(result.skipped
 						? ` ${result.skipped} file(s) in the repository were skipped because their type is not in your Pull extensions.`
 						: ''),
@@ -655,10 +677,30 @@ export class SyncManager {
 			await this.recordCollisions(result.collisions, result.remote);
 		}
 
+		if (result.oversized.length) {
+			const names = result.oversized.map(basename);
+			this.record('error', `Too large for GitHub, not sent: ${names.join(', ')}`);
+			new Notice(
+				`UltiSync: ${result.oversized.length} file(s) are past GitHub's 100 MB limit and were not sent.\n\n` +
+					listForPrompt(result.oversized) +
+					'\n\nEverything else in this push went through.',
+				15000,
+			);
+		}
+
+		if (result.largeFiles.length) {
+			this.record(
+				'info',
+				`${result.largeFiles.length} file(s) over ${megabytes(
+					LARGE_FILE_WARN_BYTES,
+				)} pushed: ${result.largeFiles.map(basename).join(', ')}`,
+			);
+		}
+
 		if (result.withheldDeletions.length) {
 			const held = result.withheldDeletions.length;
 			this.record('info', `${held} deletion(s) cancelled`);
-			new Notice(`GitSync: kept ${held} file(s) on GitHub. Nothing was deleted.`);
+			new Notice(`UltiSync: kept ${held} file(s) on GitHub. Nothing was deleted.`);
 		}
 
 		if (result.deletedPaths.length) {
@@ -834,7 +876,7 @@ export class SyncManager {
 		const deletionsTrustworthy = allowDeletions && relation === 'ahead';
 		if (allowDeletions && remoteDeleted.size && !deletionsTrustworthy) {
 			new Notice(
-				`GitSync: the remote has diverged from this vault, so ${remoteDeleted.size} deletion(s) were not applied.`,
+				`UltiSync: the remote has diverged from this vault, so ${remoteDeleted.size} deletion(s) were not applied.`,
 			);
 		}
 
@@ -1251,7 +1293,7 @@ export class SyncManager {
 						'Delete the local file?',
 				);
 				if (!proceed) {
-					new Notice('GitSync: kept the local file. Conflict left unresolved.');
+					new Notice('UltiSync: kept the local file. Conflict left unresolved.');
 					return;
 				}
 			}
@@ -1391,14 +1433,31 @@ export class SyncManager {
 			message = error.message;
 		}
 
-		console.error('[GitSync]', error);
+		// A rate limit is the one failure the plugin can make worse by retrying.
+		// GitHub says to honour `retry-after`, otherwise wait for the window to
+		// reset, and to back off exponentially while the limit keeps being hit.
+		// The existing hold already gates polling and the debounced push, so
+		// setting it is all that is needed to stop asking.
+		if (isRateLimited(error)) {
+			this.rateLimitStreak++;
+			const base = rateLimitDelayMs(error);
+			const wait = Math.min(
+				base * 2 ** (this.rateLimitStreak - 1),
+				MAX_RATE_LIMIT_HOLD_MS,
+			);
+			const resumesAt = Date.now() + wait;
+			this.syncHoldUntil = Math.max(this.syncHoldUntil, resumesAt);
+			message = `GitHub rate limit reached. Sync resumes at ${clockTime(resumesAt)}.`;
+		}
+
+		console.error('[UltiSync]', error);
 		this.setStatus('error', message);
 
 		const isRepeat = message === this.lastErrorMessage;
 		this.lastErrorMessage = message;
 		if (!isRepeat) {
 			this.record('error', message);
-			new Notice(`GitSync: ${message}`, requiresUserAction(error) ? 15000 : undefined);
+			new Notice(`UltiSync: ${message}`, requiresUserAction(error) ? 15000 : undefined);
 		}
 		this.refreshUI();
 
@@ -1416,6 +1475,7 @@ export class SyncManager {
 	/** Called once anything succeeds, so the next failure is announced again. */
 	private clearErrorLatch(): void {
 		this.lastErrorMessage = null;
+		this.rateLimitStreak = 0;
 	}
 
 	destroy(): void {

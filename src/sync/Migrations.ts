@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS, DEFAULT_STATE } from '../types.ts';
 // Interfaces do not exist at runtime, so these are imported as types
 // explicitly. That is what lets node --test load this module directly.
-import type { GitSyncSettings, SyncStateData, TrackedFile } from '../types.ts';
+import type { UltiSyncSettings, SyncStateData, TrackedFile } from '../types.ts';
 
 /**
  * Bump when the stored shape changes in a way that cannot be absorbed by
@@ -13,7 +13,7 @@ export const SCHEMA_VERSION = 1;
 const DEBUG_LOG_LIMIT = 200;
 
 export interface MigrationResult {
-	settings: GitSyncSettings;
+	settings: UltiSyncSettings;
 	state: SyncStateData;
 	/** True when what was read differs from what should be stored. */
 	changed: boolean;
@@ -99,7 +99,7 @@ export function migrate(raw: unknown): MigrationResult {
 	}
 
 	const rawSettings = isRecord(data.settings) ? data.settings : {};
-	const settings: GitSyncSettings = {
+	const settings: UltiSyncSettings = {
 		syncEnabled:
 			typeof rawSettings.syncEnabled === 'boolean'
 				? rawSettings.syncEnabled

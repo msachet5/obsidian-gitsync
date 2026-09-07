@@ -1,6 +1,6 @@
 import { TFile, Vault } from 'obsidian';
 import { RemoteSnapshot } from '../github/GitHubClient';
-import { GitSyncSettings, NEW_FILE_SETTLE_MS, SyncStateData } from '../types';
+import { UltiSyncSettings, NEW_FILE_SETTLE_MS, SyncStateData } from '../types';
 import { isIgnoredPath, matchesExtensions, normalizePath } from '../vault/PathFilter';
 import { sha256 } from '../vault/VaultScanner';
 
@@ -19,7 +19,7 @@ export interface RemoteChanges {
 export class ChangeDetector {
 	constructor(
 		private vault: Vault,
-		private settings: GitSyncSettings,
+		private settings: UltiSyncSettings,
 	) {}
 
 	async detectLocalChanges(

@@ -65,15 +65,27 @@ interface ConditionalResponse<T> {
 	etag: string | undefined;
 }
 
+/** What GitHub said about the rate limit on the response that was refused. */
+export interface RateLimitInfo {
+	/** Seconds from `retry-after`, when GitHub named a wait itself. */
+	retryAfter?: number;
+	/** Epoch seconds from `x-ratelimit-reset`, when the hourly budget refills. */
+	reset?: number;
+	/** Requests left in the current window, from `x-ratelimit-remaining`. */
+	remaining?: number;
+}
+
 export class GitHubApiError extends Error {
 	readonly status: number;
 	readonly raw: unknown;
+	readonly rate: RateLimitInfo | undefined;
 
-	constructor(status: number, message: string, raw?: unknown) {
+	constructor(status: number, message: string, raw?: unknown, rate?: RateLimitInfo) {
 		super(message);
 		this.name = 'GitHubApiError';
 		this.status = status;
 		this.raw = raw;
+		this.rate = rate;
 	}
 }
 
@@ -87,18 +99,106 @@ export function isMissingBranch(error: unknown): boolean {
 	return error instanceof GitHubApiError && (error.status === 404 || error.status === 409);
 }
 
+/**
+ * True when GitHub refused because of a rate limit rather than because
+ * something is actually wrong. The primary hourly budget answers 403 or 429
+ * with `x-ratelimit-remaining: 0`; a secondary limit answers with
+ * `retry-after`, or with a message that names the limit.
+ */
+export function isRateLimited(error: unknown): boolean {
+	if (!(error instanceof GitHubApiError)) return false;
+	if (error.status !== 403 && error.status !== 429) return false;
+	if (error.rate?.retryAfter !== undefined) return true;
+	if (error.rate?.remaining === 0) return true;
+	return /rate limit|secondary|abuse/i.test(error.message);
+}
+
+/** Longest wait worth honouring. The hourly budget always resets within this. */
+const MAX_RATE_LIMIT_WAIT_MS = 60 * 60 * 1000;
+
+/**
+ * How long to leave the API alone, following GitHub's own guidance: honour
+ * `retry-after` when it is present, otherwise wait for the window to reset,
+ * otherwise wait the minute GitHub asks for when it says nothing specific.
+ */
+export function rateLimitDelayMs(error: unknown, now = Date.now()): number {
+	const fallback = 60 * 1000;
+	const rate = error instanceof GitHubApiError ? error.rate : undefined;
+	if (!rate) return fallback;
+	if (rate.retryAfter !== undefined && rate.retryAfter > 0) {
+		return Math.min(rate.retryAfter * 1000, MAX_RATE_LIMIT_WAIT_MS);
+	}
+	if (rate.reset !== undefined) {
+		const until = rate.reset * 1000 - now;
+		if (until > 0) return Math.min(until, MAX_RATE_LIMIT_WAIT_MS);
+	}
+	return fallback;
+}
+
+/**
+ * True when GitHub refused one blob for its size. Files over 100 MiB are
+ * blocked outright, and base64 encoding inflates the request body by about a
+ * third, so a file under that limit can still be refused as a payload.
+ */
+export function isTooLargeError(error: unknown): boolean {
+	if (!(error instanceof GitHubApiError)) return false;
+	if (error.status === 413) return true;
+	return (
+		(error.status === 400 || error.status === 422) &&
+		/too large|too big|exceeds|payload|size limit/i.test(error.message)
+	);
+}
+
 /** ETag per owner/repo/branch, so an unchanged branch read costs no rate limit. */
 const branchRefCache = new Map<string, { etag: string; ref: GitReference }>();
 
 /** The last commit this installation placed on a branch, to spot stale reads. */
 const lastPushedHead = new Map<string, string>();
 
-function readEtag(headers: Record<string, string> | undefined): string | undefined {
+function headerOf(
+	headers: Record<string, string> | undefined,
+	name: string,
+): string | undefined {
 	if (!headers) return undefined;
-	for (const [name, value] of Object.entries(headers)) {
-		if (name.toLowerCase() === 'etag') return value;
+	const wanted = name.toLowerCase();
+	for (const [key, value] of Object.entries(headers)) {
+		if (key.toLowerCase() === wanted) return value;
 	}
 	return undefined;
+}
+
+function readEtag(headers: Record<string, string> | undefined): string | undefined {
+	return headerOf(headers, 'etag');
+}
+
+function numberHeader(
+	headers: Record<string, string> | undefined,
+	name: string,
+): number | undefined {
+	const raw = headerOf(headers, name);
+	if (raw === undefined) return undefined;
+	const value = Number(raw);
+	return Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * GitHub reports a rate limit through headers rather than the body:
+ * `retry-after` on a secondary limit, and `x-ratelimit-remaining` with
+ * `x-ratelimit-reset` for the hourly budget. Captured on every refusal so the
+ * plugin can wait exactly as long as GitHub asked rather than guessing.
+ */
+function rateLimitOf(headers: Record<string, string> | undefined): RateLimitInfo | undefined {
+	const retryAfter = numberHeader(headers, 'retry-after');
+	const reset = numberHeader(headers, 'x-ratelimit-reset');
+	const remaining = numberHeader(headers, 'x-ratelimit-remaining');
+	if (retryAfter === undefined && reset === undefined && remaining === undefined) {
+		return undefined;
+	}
+	return {
+		...(retryAfter === undefined ? {} : { retryAfter }),
+		...(reset === undefined ? {} : { reset }),
+		...(remaining === undefined ? {} : { remaining }),
+	};
 }
 
 function parseBody(text: string | undefined): unknown {
@@ -141,7 +241,7 @@ export class GitHubClient {
 			Accept: 'application/vnd.github+json',
 			Authorization: `Bearer ${this.token}`,
 			'X-GitHub-Api-Version': this.apiVersion,
-			'User-Agent': 'gitsync',
+			'User-Agent': 'ultisync',
 		};
 	}
 
@@ -169,6 +269,7 @@ export class GitHubClient {
 					response.status,
 					`${messageOf(parsed, `HTTP ${response.status}`)} (${method} ${path})`,
 					parsed,
+					rateLimitOf(response.headers),
 				);
 			}
 			return parsed as T;
@@ -258,6 +359,7 @@ export class GitHubClient {
 					response.status,
 					`${messageOf(parsed, `HTTP ${response.status}`)} (GET ${path})`,
 					parsed,
+					rateLimitOf(response.headers),
 				);
 			}
 			return {

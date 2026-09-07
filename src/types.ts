@@ -11,7 +11,7 @@ export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 /** How long a path the plugin just wrote is exempt from looking like a user edit. */
 export const SELF_WRITE_GRACE_MS = 2000;
 
-export interface GitSyncSettings {
+export interface UltiSyncSettings {
 	/** Master switch. Off until the setup check reaches a conclusion. */
 	syncEnabled: boolean;
 	/** Keep deleted files in the vault's own .trash instead of the system one. */
@@ -66,7 +66,7 @@ export interface SyncStateData {
 export interface PersistedData {
 	/** Lets a later build recognise and upgrade what an earlier one wrote. */
 	schemaVersion: number;
-	settings: GitSyncSettings;
+	settings: UltiSyncSettings;
 	state: SyncStateData;
 }
 
@@ -120,7 +120,19 @@ export const DEFAULT_EXTENSIONS = [
 /** Warn beyond this before hashing, because the check stops feeling instant. */
 export const LARGE_CHECK_BYTES = 200 * 1024 * 1024;
 
-export const DEFAULT_SETTINGS: GitSyncSettings = {
+/**
+ * GitHub warns above this size but still accepts the push, so the file is sent
+ * and the warning is passed on rather than the file being withheld.
+ */
+export const LARGE_FILE_WARN_BYTES = 50 * 1024 * 1024;
+
+/**
+ * GitHub blocks any single file above this outright. Attempting one wastes an
+ * upload of the whole file to earn a refusal, so it is reported instead.
+ */
+export const MAX_BLOB_BYTES = 100 * 1024 * 1024;
+
+export const DEFAULT_SETTINGS: UltiSyncSettings = {
 	syncEnabled: true,
 	recycleBin: false,
 	githubOwner: '',

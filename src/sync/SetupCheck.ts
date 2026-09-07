@@ -1,6 +1,6 @@
 import { TFile, Vault } from 'obsidian';
 import { GitHubClient, RemoteSnapshot } from '../github/GitHubClient';
-import { GitSyncSettings } from '../types';
+import { UltiSyncSettings } from '../types';
 import { isIgnoredPath, matchesExtensions, normalizePath } from '../vault/PathFilter';
 import { gitBlobSha } from '../vault/VaultScanner';
 
@@ -60,7 +60,7 @@ export class SetupCheck {
 	constructor(
 		private vault: Vault,
 		private github: GitHubClient,
-		private settings: GitSyncSettings,
+		private settings: UltiSyncSettings,
 	) {}
 
 	async run(onProgress?: ProgressCallback): Promise<SetupCheckResult> {

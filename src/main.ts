@@ -16,11 +16,12 @@ import {
 	DEFAULT_SETTINGS,
 	DEFAULT_STATE,
 	LARGE_CHECK_BYTES,
-	GitSyncSettings,
+	UltiSyncSettings,
 	PersistedData,
 	SyncStateData,
 	SyncStatus,
 } from './types';
+import { loadToken, settingsForDisk } from './TokenStore';
 import {
 	isIgnoredPath,
 	matchesExtensions,
@@ -55,7 +56,7 @@ function describeConnectionFailure(error: unknown): string {
 }
 
 /** A defaults object nobody else shares, so later edits cannot reach back. */
-function freshSettings(): GitSyncSettings {
+function freshSettings(): UltiSyncSettings {
 	return {
 		...DEFAULT_SETTINGS,
 		pullExtensions: [...DEFAULT_EXTENSIONS],
@@ -76,8 +77,8 @@ interface SettingsCapableApp {
 	};
 }
 
-export default class GitSyncPlugin extends Plugin {
-	settings: GitSyncSettings = freshSettings();
+export default class UltiSyncPlugin extends Plugin {
+	settings: UltiSyncSettings = freshSettings();
 
 	private state!: SyncStateData;
 	private stateStore!: SyncStateStore;
@@ -137,7 +138,7 @@ export default class GitSyncPlugin extends Plugin {
 				}),
 		);
 
-		this.addRibbonIcon('refresh-cw', 'GitSync status', () => {
+		this.addRibbonIcon('refresh-cw', 'UltiSync status', () => {
 			void this.revealPanel();
 		});
 
@@ -203,7 +204,7 @@ export default class GitSyncPlugin extends Plugin {
 
 		const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
 		if (!leaf) {
-			new Notice('GitSync: could not open the status panel.');
+			new Notice('UltiSync: could not open the status panel.');
 			return;
 		}
 
@@ -272,7 +273,7 @@ export default class GitSyncPlugin extends Plugin {
 			this.setConnectionState('healthy');
 			return { ok: true };
 		} catch (error) {
-			console.error('[GitSync]', error);
+			console.error('[UltiSync]', error);
 			this.setConnectionState('failed');
 			return { ok: false, message: describeConnectionFailure(error) };
 		}
@@ -289,7 +290,7 @@ export default class GitSyncPlugin extends Plugin {
 
 		const probe = await this.probeConnection(draft);
 		if (!probe.ok) {
-			new Notice(`GitSync: ${probe.message}`, 12000);
+			new Notice(`UltiSync: ${probe.message}`, 12000);
 			await this.disableSync();
 			return;
 		}
@@ -306,7 +307,7 @@ export default class GitSyncPlugin extends Plugin {
 		// Turning it on is a promise that it will work, so prove it first.
 		const probe = await this.probeConnection();
 		if (!probe.ok) {
-			new Notice(`GitSync: ${probe.message}`, 12000);
+			new Notice(`UltiSync: ${probe.message}`, 12000);
 			this.settings.syncEnabled = false;
 			await this.persistEverything();
 			this.setStatus('error', probe.message ?? 'Not connected.');
@@ -339,7 +340,7 @@ export default class GitSyncPlugin extends Plugin {
 		this.restartSyncManager();
 		this.setConnectionState('incomplete');
 		this.refreshDerivedStatus();
-		new Notice('GitSync: credentials and settings cleared. Your files were not touched.');
+		new Notice('UltiSync: credentials and settings cleared. Your files were not touched.');
 	}
 
 	// Runs the comparison and puts the outcome to the user. Nothing is written
@@ -359,7 +360,7 @@ export default class GitSyncPlugin extends Plugin {
 				if (progress.totalBytes > LARGE_CHECK_BYTES && !warnedLarge) {
 					warnedLarge = true;
 					new Notice(
-						`GitSync: this vault and repository share ${formatBytes(progress.totalBytes)} of files. ` +
+						`UltiSync: this vault and repository share ${formatBytes(progress.totalBytes)} of files. ` +
 							'The check will take a while. You can leave it running.',
 						10000,
 					);
@@ -373,8 +374,8 @@ export default class GitSyncPlugin extends Plugin {
 			});
 		} catch (error) {
 			const message = describeConnectionFailure(error);
-			console.error('[GitSync]', error);
-			new Notice(`GitSync: ${message}`, 12000);
+			console.error('[UltiSync]', error);
+			new Notice(`UltiSync: ${message}`, 12000);
 			this.setConnectionState('failed');
 			this.setStatus('error', message);
 			await this.disableSync();
@@ -391,7 +392,7 @@ export default class GitSyncPlugin extends Plugin {
 
 	private async applySetupDecision(decision: SetupDecision): Promise<void> {
 		if (decision === 'cancel') {
-			new Notice('GitSync: left switched off. Turn Sync on to run the check again.');
+			new Notice('UltiSync: left switched off. Turn Sync on to run the check again.');
 			await this.disableSync();
 			return;
 		}
@@ -553,6 +554,11 @@ export default class GitSyncPlugin extends Plugin {
 		const raw: unknown = await this.loadData();
 		const result = migrate(raw);
 
+		// Prefer Obsidian's secret storage over the data file. A token found in
+		// the data file is moved across here; the write below is what removes it.
+		const adopted = loadToken(this.app, result.settings.token);
+		result.settings.token = adopted.token;
+
 		Object.assign(this.settings, result.settings);
 		this.state = result.state;
 		this.stateStore = new SyncStateStore(this, () => this.settings);
@@ -563,10 +569,15 @@ export default class GitSyncPlugin extends Plugin {
 
 		// Written back only when the stored shape actually differed, so an
 		// ordinary launch does not rewrite the file for nothing.
-		if (result.changed) {
+		if (result.changed || adopted.migrated) {
 			const at = new Date().toISOString();
 			for (const note of result.notes) {
 				this.state.debugLog.push(`${at} data file upgraded — ${note}`);
+			}
+			if (adopted.migrated) {
+				this.state.debugLog.push(
+					`${at} access token moved into Obsidian's secret storage and cleared from the data file`,
+				);
 			}
 			await this.persistEverything();
 		}
@@ -583,7 +594,7 @@ export default class GitSyncPlugin extends Plugin {
 	private async persistEverything(): Promise<void> {
 		await this.saveData({
 			schemaVersion: SCHEMA_VERSION,
-			settings: this.settings,
+			settings: settingsForDisk(this.app, this.settings),
 			state: this.state,
 		} satisfies PersistedData);
 	}
@@ -605,7 +616,7 @@ export default class GitSyncPlugin extends Plugin {
 				'GitHub itself is not modified.\n\nContinue?',
 		);
 		if (!confirmed) {
-			new Notice('GitSync: reset cancelled. Nothing was changed.');
+			new Notice('UltiSync: reset cancelled. Nothing was changed.');
 			return;
 		}
 
@@ -621,8 +632,8 @@ export default class GitSyncPlugin extends Plugin {
 				await this.app.vault.trash(file, !keepCopies);
 			}
 		} catch (error) {
-			console.error('[GitSync]', error);
-			new Notice('GitSync: could not clear local files. Nothing was re-pulled.');
+			console.error('[UltiSync]', error);
+			new Notice('UltiSync: could not clear local files. Nothing was re-pulled.');
 			this.setStatus('error', 'Reset failed while clearing local files.');
 			this.restartSyncManager();
 			return;
@@ -677,7 +688,7 @@ export default class GitSyncPlugin extends Plugin {
 	private openStatus(): void {
 		const conflicts = Object.keys(this.state.conflicts).length;
 		new Notice(
-			`GitSync: ${this.currentStatusDetail}${conflicts ? ` Conflicts: ${conflicts}.` : ''}`,
+			`UltiSync: ${this.currentStatusDetail}${conflicts ? ` Conflicts: ${conflicts}.` : ''}`,
 		);
 	}
 }

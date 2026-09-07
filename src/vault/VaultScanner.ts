@@ -1,5 +1,5 @@
 import { TFile, Vault } from 'obsidian';
-import { GitSyncSettings } from '../types';
+import { UltiSyncSettings } from '../types';
 import { isIgnoredPath, matchesExtensions, normalizePath } from './PathFilter';
 
 export interface FileSnapshot {
@@ -57,7 +57,7 @@ export function base64ToArrayBuffer(value: string): ArrayBuffer {
 export class VaultScanner {
 	constructor(
 		private vault: Vault,
-		private settings: GitSyncSettings,
+		private settings: UltiSyncSettings,
 	) {}
 
 	getEligibleFiles(extensions: string[]): TFile[] {

@@ -1,4 +1,4 @@
-# GitSync
+# UltiSync
 
 An Obsidian plugin that synchronizes selected vault files with a single GitHub
 repository through GitHub's Git Database REST API. It runs on Obsidian Desktop
@@ -6,6 +6,23 @@ and on iOS.
 
 The plugin does not shell out to Git, and it never force-pushes. It talks to the
 GitHub API directly, so no Git binary is required on either device.
+
+## Before you start
+
+Use a disposable test vault and a disposable test repository until you have
+verified the behavior you depend on. This plugin writes to your vault and to
+your repository.
+
+## Network use and privacy
+
+UltiSync talks to exactly one remote service: the GitHub REST API at
+`https://api.github.com`. It is used to read and write the repository you
+configure — refs, commits, trees and blobs — and nothing else.
+
+There is no telemetry, no analytics, no update check, and no server operated by
+this plugin's author. Your notes and your access token are sent only to GitHub,
+using a token you create yourself. The author never receives any of your data
+and has no way to.
 
 ## Features
 
@@ -21,12 +38,6 @@ GitHub API directly, so no Git binary is required on either device.
 - Three-way merge of Markdown changed in both places
 - Conflict copies and explicit keep-local / keep-remote resolution
 - Status bar, ribbon icon and commands
-
-## Before you start
-
-Use a disposable test vault and a disposable test repository until you have
-verified the behavior you depend on. This plugin writes to your vault and to
-your repository.
 
 ## Requirements
 
@@ -70,11 +81,11 @@ npm run dev
 Copy the three runtime files into your vault:
 
 ```text
-<VAULT>/.obsidian/plugins/gitsync/
+<VAULT>/.obsidian/plugins/ultisync/
 ```
 
 Then open **Settings → Community plugins**, disable Restricted mode if it is on,
-enable **GitSync**, and open the plugin settings.
+enable **UltiSync**, and open the plugin settings.
 
 On iOS the same three files go in the same location. Build on a desktop and
 transfer them into the vault using whatever file transfer method you already
@@ -91,18 +102,32 @@ Branch:                 main
 Personal access token:  your fine-grained PAT
 ```
 
+Scope the token to the target repository and grant it only the Contents
+read/write permission. Nothing else is needed.
+
 The token field is a password input, and the token is never written to a log or
-a commit. Scope the token to the target repository and grant it only the
-Contents read/write permission.
+a commit. On Obsidian 1.11.4 and later it is held in Obsidian's own secret
+storage for the vault. On earlier versions there is no secret storage, so it is
+stored in plain text in the plugin's data file inside the vault's configuration
+folder. UltiSync never syncs that folder, but anything that copies your whole
+vault — iCloud, Dropbox, Obsidian Sync, a backup — copies the token with it.
+You can revoke it on GitHub at any time.
 
 Use **Test connection** to verify authentication, repository access and the
 branch. It reports the branch ref and the current commit SHA.
 
 ## Extensions
 
-The pull and push lists both start empty. Nothing synchronizes until you select
-extensions. The two lists are independent, and settings are local to each
-installation, so a phone and a desktop can carry different configurations.
+The pull and push lists are independent, and both default to:
+
+```text
+.md .canvas .base .png .jpg .jpeg .webp .svg
+```
+
+Audio, video and PDF are supported and one checkbox away, but are off by
+default — see [Repository size and large files](#repository-size-and-large-files)
+below. Settings are local to each installation, so a phone and a desktop can
+carry different configurations.
 
 The selectable set is the file types Obsidian itself supports:
 
@@ -116,6 +141,28 @@ The selectable set is the file types Obsidian itself supports:
 
 Matching is case-insensitive. **Select all** and **Clear all** are available.
 
+## Repository size and large files
+
+GitHub publishes these limits, and they apply to your repository:
+
+- Files over 50 MiB push successfully but produce a warning from Git. UltiSync
+  sends them and notes them in the activity log.
+- Files over 100 MiB are blocked outright. UltiSync does not attempt them; it
+  names them and lets the rest of the push through.
+- GitHub recommends repositories stay "ideally less than 1 GB, and less than
+  5 GB is strongly recommended", and may email you asking for corrective action
+  if a repository strains its infrastructure.
+
+Nothing in GitHub's terms restricts what kind of files you keep in a repository,
+so syncing images, PDFs or audio is fine as far as that goes. The thing worth
+knowing is mechanical: Git keeps every version of every file forever. A 4 MB
+image edited ten times occupies 40 MB of history permanently, and removing it
+means rewriting history. Text compresses and deduplicates well; media does not.
+
+That is why audio, video and PDF are off by default. Turn them on if you want
+them — just size the repository for a growing archive rather than for the
+current contents of your vault.
+
 ## Ignored paths
 
 One path or path prefix per line:
@@ -125,8 +172,9 @@ One path or path prefix per line:
 .obsidian/workspace-mobile.json
 ```
 
-Ignored paths are never pulled or pushed. `.trash` and `.obsidian` are always
-ignored.
+Ignored paths are never pulled or pushed. The vault's `.trash` folder and
+Obsidian's configuration folder (`.obsidian` unless you have changed it) are
+always ignored, which is why the plugin's own data file never reaches GitHub.
 
 ## Commands
 
@@ -213,7 +261,7 @@ Deletions propagate in both directions. Removed files go to the vault's
   not an instruction to delete everything.
 - A file the other device edited since this one last saw it is reported as a
   collision rather than removed.
-- A batch of five or more deletions is held back on an automatic push and
+- A batch of more than twenty deletions is held back on an automatic push and
   reported. Pushing manually sends it after a confirmation listing the files.
 
 ### Renames
@@ -225,6 +273,15 @@ rename preserves content.
 
 A file renamed and edited in the same commit has a different SHA, and is handled
 as a deletion plus a download.
+
+### Rate limits
+
+Branch reads are conditional, so an unchanged branch answers `304 Not Modified`
+and costs nothing against GitHub's hourly budget. If GitHub does refuse for a
+rate limit, UltiSync stops asking rather than retrying on the next tick: it
+honours the `retry-after` header when GitHub sends one, otherwise waits for the
+window named by `x-ratelimit-reset`, otherwise a minute. Repeated refusals back
+off exponentially. The status bar says when synchronization resumes.
 
 ### Files outside the extension filters
 
@@ -246,23 +303,28 @@ are not pushed.
 ```text
 src/
 ├── main.ts
+├── platform.ts
 ├── types.ts
+├── TokenStore.ts
 ├── github/
 │   └── GitHubClient.ts
 ├── sync/
 │   ├── ChangeDetector.ts
 │   ├── ConflictDetector.ts
 │   ├── MergeAttempt.ts
+│   ├── Migrations.ts
 │   ├── PullManager.ts
 │   ├── PushManager.ts
 │   ├── RenameRecord.ts
+│   ├── SetupCheck.ts
 │   ├── SyncManager.ts
 │   ├── SyncState.ts
 │   └── TextMerge.ts
 ├── ui/
+│   ├── ConfirmModal.ts
 │   ├── ConflictModal.ts
-│   ├── FirstRunModal.ts
 │   ├── SettingsTab.ts
+│   ├── SetupCheckModal.ts
 │   ├── StatusBar.ts
 │   └── SyncPanelView.ts
 └── vault/

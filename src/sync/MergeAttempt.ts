@@ -49,7 +49,7 @@ export async function attemptMerge(
 		if (!result?.clean) return null;
 		return { merged: result.merged, theirBytes };
 	} catch (error) {
-		console.error('[GitSync] merge unavailable for', path, error);
+		console.error('[UltiSync] merge unavailable for', path, error);
 		return null;
 	}
 }

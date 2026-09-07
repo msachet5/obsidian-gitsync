@@ -5,9 +5,17 @@ import {
 	NewTreeEntry,
 	RemoteSnapshot,
 	isMissingBranch,
+	isTooLargeError,
 } from '../github/GitHubClient';
 import { devicePlatform } from '../platform';
-import { EMPTY_TREE_SHA, GitSyncSettings, SyncStateData, TrackedFile } from '../types';
+import {
+	EMPTY_TREE_SHA,
+	UltiSyncSettings,
+	LARGE_FILE_WARN_BYTES,
+	MAX_BLOB_BYTES,
+	SyncStateData,
+	TrackedFile,
+} from '../types';
 import { isIgnoredPath, isSafeVaultPath, matchesExtensions } from '../vault/PathFilter';
 import { bytesToBase64, gitBlobSha, sha256 } from '../vault/VaultScanner';
 import { ChangeDetector } from './ChangeDetector';
@@ -41,6 +49,10 @@ export interface PushResult {
 	commitSha: string | null;
 	collisions: string[];
 	withheldDeletions: string[];
+	/** Files GitHub will not accept at their size. Named rather than retried. */
+	oversized: string[];
+	/** Files past GitHub's warning threshold that were sent anyway. */
+	largeFiles: string[];
 	remote: RemoteSnapshot | null;
 	deletedPaths: string[];
 	writtenShas: Record<string, string>;
@@ -51,6 +63,8 @@ export interface PushResult {
 interface PushPlan {
 	entries: NewTreeEntry[];
 	collisions: string[];
+	oversized: string[];
+	largeFiles: string[];
 	deletedPaths: string[];
 	withheldDeletions: string[];
 	renamedPaths: string[];
@@ -113,7 +127,7 @@ export class PushManager {
 	constructor(
 		private vault: Vault,
 		private github: GitHubClient,
-		private settings: GitSyncSettings,
+		private settings: UltiSyncSettings,
 	) {}
 
 	// Pushes local changes without pulling first.
@@ -162,6 +176,8 @@ export class PushManager {
 					changedCount: 0,
 					commitSha: null,
 					collisions: plan.collisions,
+					oversized: plan.oversized,
+					largeFiles: plan.largeFiles,
 					withheldDeletions: plan.withheldDeletions,
 					remote,
 					deletedPaths: [],
@@ -210,6 +226,8 @@ export class PushManager {
 				changedCount: plan.entries.length,
 				commitSha: commit.sha,
 				collisions: plan.collisions,
+				oversized: plan.oversized,
+				largeFiles: plan.largeFiles,
 				withheldDeletions: plan.withheldDeletions,
 				remote,
 				deferredUntil: plan.deferredUntil,
@@ -250,7 +268,13 @@ export class PushManager {
 
 		const additions = plan.entries.filter((entry) => entry.sha !== null);
 		if (!additions.length) {
-			return { ...this.emptyResult(), remote: empty, trace };
+			return {
+				...this.emptyResult(),
+				oversized: plan.oversized,
+				largeFiles: plan.largeFiles,
+				remote: empty,
+				trace,
+			};
 		}
 
 		const tree = await this.github.createTree(null, additions);
@@ -280,6 +304,8 @@ export class PushManager {
 			changedCount: additions.length,
 			commitSha: commit.sha,
 			collisions: plan.collisions,
+			oversized: plan.oversized,
+			largeFiles: plan.largeFiles,
 			withheldDeletions: [],
 			remote: empty,
 			deletedPaths: [],
@@ -313,6 +339,8 @@ export class PushManager {
 
 		const entries: NewTreeEntry[] = [];
 		const collisions: string[] = [];
+		const oversized: string[] = [];
+		const largeFiles: string[] = [];
 		const deletedPaths: string[] = [];
 		const withheldDeletions: string[] = [];
 		const renamedPaths: string[] = [];
@@ -323,6 +351,19 @@ export class PushManager {
 
 			const file = this.vault.getAbstractFileByPath(path);
 			if (!(file instanceof TFile)) continue;
+
+			// Reading and base64-encoding a file GitHub is certain to refuse costs
+			// the whole upload to earn the refusal, so the size is checked first.
+			if (file.stat.size > MAX_BLOB_BYTES) {
+				oversized.push(path);
+				trace.push(
+					`${path}: ${file.stat.size} bytes is past GitHub's 100 MiB limit, not sent`,
+				);
+				continue;
+			}
+			if (file.stat.size >= LARGE_FILE_WARN_BYTES) {
+				largeFiles.push(path);
+			}
 
 			const bytes = await this.vault.readBinary(file);
 			const localBlobSha = await gitBlobSha(bytes);
@@ -353,10 +394,13 @@ export class PushManager {
 
 				await this.vault.process(file, () => outcome.merged);
 				const mergedBytes = await this.vault.readBinary(file);
-				const mergedBlob = await this.github.createBlob(
-					bytesToBase64(mergedBytes),
-					'base64',
+				const mergedBlob = await this.createBlobOrSkip(
+					path,
+					mergedBytes,
+					oversized,
+					trace,
 				);
+				if (!mergedBlob) continue;
 
 				entries.push({ path, mode: FILE_MODE, type: 'blob', sha: mergedBlob.sha });
 				pushedTracking.set(path, {
@@ -368,7 +412,8 @@ export class PushManager {
 				continue;
 			}
 
-			const blob = await this.github.createBlob(bytesToBase64(bytes), 'base64');
+			const blob = await this.createBlobOrSkip(path, bytes, oversized, trace);
+			if (!blob) continue;
 			entries.push({ path, mode: FILE_MODE, type: 'blob', sha: blob.sha });
 			pushedTracking.set(path, {
 				localHash: await sha256(bytes),
@@ -469,6 +514,8 @@ export class PushManager {
 		return {
 			entries,
 			collisions,
+			oversized,
+			largeFiles,
 			deletedPaths,
 			withheldDeletions,
 			renamedPaths,
@@ -476,6 +523,35 @@ export class PushManager {
 			deferredUntil,
 			trace,
 		};
+	}
+
+	/**
+	 * Uploads one file's bytes, or reports it as oversized and returns null.
+	 *
+	 * The size check before this catches everything GitHub documents, but the
+	 * documented limit is on the file while the request carries it base64
+	 * encoded, about a third larger. A refusal on that ground is one file's
+	 * problem, so it is named and the rest of the push continues rather than the
+	 * whole commit failing on it. Anything else is rethrown untouched.
+	 */
+	private async createBlobOrSkip(
+		path: string,
+		bytes: ArrayBuffer,
+		oversized: string[],
+		trace: string[],
+	): Promise<{ sha: string } | null> {
+		try {
+			return await this.github.createBlob(bytesToBase64(bytes), 'base64');
+		} catch (error) {
+			if (!isTooLargeError(error)) throw error;
+			oversized.push(path);
+			trace.push(
+				`${path}: GitHub refused the blob for its size (${
+					error instanceof Error ? error.message : 'no message'
+				}), not sent`,
+			);
+			return null;
+		}
 	}
 
 	// Decides whether a set of apparent local deletions may be sent at all.
@@ -521,6 +597,8 @@ export class PushManager {
 			changedCount: 0,
 			commitSha: null,
 			collisions: [],
+			oversized: [],
+			largeFiles: [],
 			withheldDeletions: [],
 			remote: null,
 			deletedPaths: [],
