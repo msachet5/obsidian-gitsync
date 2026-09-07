@@ -1,5 +1,6 @@
 import { Notice, Plugin, TAbstractFile, TFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
+import { SCHEMA_VERSION, migrate } from './sync/Migrations';
 import { SyncStateStore, generateDeviceId } from './sync/SyncState';
 import { ConflictModal } from './ui/ConflictModal';
 import { ConfirmModal } from './ui/ConfirmModal';
@@ -549,32 +550,24 @@ export default class GitSyncPlugin extends Plugin {
 	}
 
 	private async loadSettingsAndState(): Promise<void> {
-		const saved = (await this.loadData()) as Partial<PersistedData> | null;
+		const raw: unknown = await this.loadData();
+		const result = migrate(raw);
 
-		Object.assign(this.settings, freshSettings(), saved?.settings ?? {});
+		Object.assign(this.settings, result.settings);
+		this.state = result.state;
 		this.stateStore = new SyncStateStore(this, () => this.settings);
 
-		const rawState = saved?.state;
-		if (rawState) {
-			this.state = {
-				...DEFAULT_STATE,
-				...rawState,
-				trackedFiles: rawState.trackedFiles ?? {},
-				conflicts: rawState.conflicts ?? {},
-				lastSyncedTree: rawState.lastSyncedTree ?? {},
-				pendingRenames: rawState.pendingRenames ?? {},
-			};
-		} else {
-			this.state = await this.stateStore.load();
-		}
-
-		// load() is what mints a device id, so a state written before ids existed
-		// has to go back through it.
 		if (!this.state.deviceId) {
-			this.state = await this.stateStore.load();
+			this.state.deviceId = generateDeviceId();
 		}
 
-		if (!saved?.state) {
+		// Written back only when the stored shape actually differed, so an
+		// ordinary launch does not rewrite the file for nothing.
+		if (result.changed) {
+			const at = new Date().toISOString();
+			for (const note of result.notes) {
+				this.state.debugLog.push(`${at} data file upgraded — ${note}`);
+			}
 			await this.persistEverything();
 		}
 	}
@@ -589,6 +582,7 @@ export default class GitSyncPlugin extends Plugin {
 
 	private async persistEverything(): Promise<void> {
 		await this.saveData({
+			schemaVersion: SCHEMA_VERSION,
 			settings: this.settings,
 			state: this.state,
 		} satisfies PersistedData);

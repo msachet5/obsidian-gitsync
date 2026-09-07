@@ -1,5 +1,3 @@
-import { Platform } from 'obsidian';
-
 export const PULL_INTERVAL_MS = 5000;
 export const POLL_HOLD_AFTER_PUSH_MS = 10000;
 export const PUSH_DELAY_SECONDS = 5;
@@ -66,6 +64,8 @@ export interface SyncStateData {
 
 /** What the plugin writes to data.json. */
 export interface PersistedData {
+	/** Lets a later build recognise and upgrade what an earlier one wrote. */
+	schemaVersion: number;
 	settings: GitSyncSettings;
 	state: SyncStateData;
 }
@@ -146,13 +146,6 @@ export const DEFAULT_STATE: SyncStateData = {
 };
 
 
-/**
- * Coarse platform label used in device ids and commit messages. Obsidian runs
- * on more than macOS and iOS, so this deliberately says only mobile or desktop.
- */
-export function devicePlatform(): 'mobile' | 'desktop' {
-	return Platform.isMobile ? 'mobile' : 'desktop';
-}
 
 /**
  * Whether the plugin can currently reach the repository at all. This covers

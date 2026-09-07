@@ -255,8 +255,7 @@ export class SettingsTab extends PluginSettingTab {
 		});
 	}
 
-	private renderSyncToggle(parent: HTMLElement): void {
-		const containerEl = parent.createDiv({ cls: 'gitsync-box' });
+	private renderSyncToggle(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Synchronization').setHeading();
 
 		const sync = new Setting(containerEl)

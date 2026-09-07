@@ -6,7 +6,8 @@ import {
 	RemoteSnapshot,
 	isMissingBranch,
 } from '../github/GitHubClient';
-import { EMPTY_TREE_SHA, GitSyncSettings, SyncStateData, TrackedFile, devicePlatform } from '../types';
+import { devicePlatform } from '../platform';
+import { EMPTY_TREE_SHA, GitSyncSettings, SyncStateData, TrackedFile } from '../types';
 import { isIgnoredPath, isSafeVaultPath, matchesExtensions } from '../vault/PathFilter';
 import { bytesToBase64, gitBlobSha, sha256 } from '../vault/VaultScanner';
 import { ChangeDetector } from './ChangeDetector';

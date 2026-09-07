@@ -122,7 +122,12 @@ export class SyncPanelView extends ItemView {
 		this.timeFact(facts, 'Last push', state.lastSuccessfulPush);
 		this.fact(facts, 'Files tracked', String(trackedCount));
 
-		if (!state.lastSyncedCommit) {
+		// A reset clears the synced commit before re-pulling, and a push can be
+		// mid-flight, so "not linked" is momentarily true while the plugin is
+		// plainly working. Prompting someone to set up what they are watching run
+		// is worse than saying nothing for a few seconds.
+		const busy = status === 'syncing' || status === 'pulling' || status === 'pushing';
+		if (!state.lastSyncedCommit && !busy) {
 			// The whole card is the affordance: this is the one state where there
 			// is exactly one useful thing to do, so it opens settings on click.
 			const warn = root.createDiv({ cls: 'ghs-card ghs-warn ghs-setup' });

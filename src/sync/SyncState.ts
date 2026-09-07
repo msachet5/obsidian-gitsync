@@ -1,11 +1,7 @@
 import { Plugin } from 'obsidian';
-import {
-	DEFAULT_STATE,
-	GitSyncSettings,
-	PersistedData,
-	SyncStateData,
-	devicePlatform,
-} from '../types';
+import { devicePlatform } from '../platform';
+import { GitSyncSettings, PersistedData, SyncStateData } from '../types';
+import { SCHEMA_VERSION, migrate } from './Migrations';
 
 /** A short, locally generated id. Never derived from hardware identifiers. */
 export function generateDeviceId(): string {
@@ -24,29 +20,17 @@ export class SyncStateStore {
 	) {}
 
 	async load(): Promise<SyncStateData> {
-		const stored = (await this.plugin.loadData()) as Partial<PersistedData> | null;
-		const state = stored?.state;
-		const merged: SyncStateData = {
-			...DEFAULT_STATE,
-			...(state ?? {}),
-			trackedFiles: state?.trackedFiles ?? {},
-			conflicts: state?.conflicts ?? {},
-			// Absent on state written before the tree snapshot existed. An empty map
-			// is the safe reading: no path was in it, so nothing looks deleted, and
-			// the first pull records the real tree.
-			lastSyncedTree: state?.lastSyncedTree ?? {},
-			pendingRenames: state?.pendingRenames ?? {},
-		};
-
-		if (!merged.deviceId) {
-			merged.deviceId = generateDeviceId();
-			await this.save(merged);
+		const { state } = migrate(await this.plugin.loadData());
+		if (!state.deviceId) {
+			state.deviceId = generateDeviceId();
+			await this.save(state);
 		}
-		return merged;
+		return state;
 	}
 
 	async save(state: SyncStateData): Promise<void> {
 		await this.plugin.saveData({
+			schemaVersion: SCHEMA_VERSION,
 			settings: this.getSettings(),
 			state,
 		} satisfies PersistedData);
