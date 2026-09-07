@@ -154,6 +154,13 @@ export function devicePlatform(): 'mobile' | 'desktop' {
 	return Platform.isMobile ? 'mobile' : 'desktop';
 }
 
+/**
+ * Whether the plugin can currently reach the repository at all. This covers
+ * the network, the credentials and the repository together, because from the
+ * user's side they are one question: is it working or not.
+ */
+export type ConnectionState = 'incomplete' | 'checking' | 'healthy' | 'failed';
+
 export type SyncStatus =
 	| 'pending'
 	| 'syncing'

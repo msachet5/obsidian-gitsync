@@ -229,7 +229,6 @@
   filter: saturate(0.6);
 }
 
-.gitsync-help,
 .gitsync-file-list {
   margin: 0 0 1em;
   padding: 0.6em 0.8em;
@@ -238,20 +237,41 @@
   background: var(--background-secondary);
 }
 
-.gitsync-help > summary,
 .gitsync-file-list > summary {
   cursor: pointer;
   font-weight: var(--font-medium);
 }
 
+/* Sits inside the GitHub box with no frame of its own, so opening it simply
+   makes that box taller. */
+.gitsync-help {
+  margin: 0 0 0.8em;
+  font-size: var(--font-ui-smaller);
+}
+
+.gitsync-help > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.gitsync-help > summary:hover {
+  color: var(--text-normal);
+}
+
 .gitsync-help ol {
-  margin: 0.8em 0 0;
-  padding-left: 1.4em;
+  margin: 0.6em 0 0;
+  padding-left: 1.3em;
+  color: var(--text-muted);
 }
 
 .gitsync-help li {
-  margin-bottom: 0.5em;
-  line-height: 1.5;
+  margin-bottom: 0.4em;
+  line-height: 1.45;
+}
+
+.gitsync-help .setting-item-description {
+  font-size: var(--font-ui-smaller);
 }
 
 .gitsync-file-list ul {
@@ -298,4 +318,65 @@
   background: var(--background-secondary);
   font-size: var(--font-ui-small);
   line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+   Settings header: connection verdict, and the way to start over
+   --------------------------------------------------------------------------- */
+
+.gitsync-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4em;
+  margin-bottom: 0.8em;
+}
+
+.gitsync-conn {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.gitsync-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.gitsync-dot-green { background: var(--color-green); }
+.gitsync-dot-orange { background: var(--color-orange); }
+.gitsync-dot-red { background: var(--color-red); }
+
+.gitsync-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.gitsync-reset:hover {
+  color: var(--text-error);
+  background: var(--background-modifier-hover);
+}
+
+/* The credential block reads as one unit, Save included, because none of it
+   means anything on its own. */
+.gitsync-box {
+  padding: 0.2em 0.9em 0.6em;
+  margin-bottom: 1.2em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.gitsync-box .setting-item:last-child {
+  border-bottom: none;
 }

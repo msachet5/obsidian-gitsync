@@ -2,12 +2,15 @@ import { Notice, Plugin, TAbstractFile, TFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
 import { SyncStateStore, generateDeviceId } from './sync/SyncState';
 import { ConflictModal } from './ui/ConflictModal';
+import { ConfirmModal } from './ui/ConfirmModal';
 import { CredentialDraft, SettingsTab } from './ui/SettingsTab';
 import { SetupCheckModal, SetupDecision } from './ui/SetupCheckModal';
 import { StatusBarController } from './ui/StatusBar';
 import { SYNC_PANEL_VIEW_TYPE, SyncPanelView } from './ui/SyncPanelView';
 import { SetupCheckResult, summarize } from './sync/SetupCheck';
+import { GitHubApiError } from './github/GitHubClient';
 import {
+	ConnectionState,
 	DEFAULT_SETTINGS,
 	DEFAULT_STATE,
 	LARGE_CHECK_BYTES,
@@ -27,6 +30,28 @@ import {
  * Obsidian does not type the settings modal, so opening this plugin's own tab
  * goes through a narrow cast rather than an app-wide `any`.
  */
+/**
+ * Turns a failure into something a person can act on. The distinction that
+ * matters is whose problem it is: the network, the token, or the repository.
+ */
+function describeConnectionFailure(error: unknown): string {
+	if (error instanceof GitHubApiError) {
+		switch (error.status) {
+			case 0:
+				return 'Not connected. Check your internet connection and try again.';
+			case 401:
+				return 'Bad credentials, please recheck your GitHub creds. The token may have expired or been revoked — generate a new one if so.';
+			case 403:
+				return 'GitHub refused the request. The token may lack Contents read/write on this repository, or the rate limit is exhausted.';
+			case 404:
+				return 'Repository or branch not found. Check the owner and repository names, and that the token can see this repository.';
+			default:
+				return `GitHub request failed (HTTP ${error.status}): ${error.message}`;
+		}
+	}
+	return error instanceof Error ? error.message : 'Connection failed.';
+}
+
 function formatBytes(bytes: number): string {
 	const mb = bytes / (1024 * 1024);
 	return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
@@ -46,6 +71,7 @@ export default class GitSyncPlugin extends Plugin {
 	private stateStore!: SyncStateStore;
 	private syncManager!: SyncManager;
 	private statusBar!: StatusBarController;
+	private settingsTab!: SettingsTab;
 
 	private currentStatus: SyncStatus = 'synced';
 	private currentStatusDetail = 'Ready';
@@ -53,6 +79,8 @@ export default class GitSyncPlugin extends Plugin {
 	// Set while a comparison is running, so a second Save or toggle cannot start
 	// an overlapping check against the same repository.
 	private checkRunning = false;
+
+	private connectionState: ConnectionState = 'incomplete';
 
 	async onload(): Promise<void> {
 		setConfigDir(this.app.vault.configDir);
@@ -63,24 +91,24 @@ export default class GitSyncPlugin extends Plugin {
 		);
 		this.syncManager = this.createSyncManager();
 
-		this.addSettingTab(
-			new SettingsTab(
+		this.settingsTab = new SettingsTab(
 				this.app,
 				{
 					settings: this.settings,
 					saveSettings: () => this.saveSettings(),
-					testConnection: () => this.testConnection(),
 					applyCredentials: (draft) => this.applyCredentials(draft),
-					setSyncEnabled: (enabled) => this.setSyncEnabled(enabled),
-					hasCredentials: () => this.hasCredentials(),
-					pushNow: () => this.syncManager.pushEverything(),
-					resetSyncState: () => this.resetSyncState(),
-					getDeviceId: () => this.state.deviceId,
-					getStatus: () => this.statusSnapshot(),
+				setSyncEnabled: (enabled) => this.setSyncEnabled(enabled),
+				hasCredentials: () => this.hasCredentials(),
+				getConnectionState: () => this.getConnectionState(),
+				confirmReset: () => this.confirmReset(),
+				pushNow: () => this.syncManager.pushEverything(),
+				resetSyncState: () => this.resetSyncState(),
+				getDeviceId: () => this.state.deviceId,
+				getStatus: () => this.statusSnapshot(),
 				},
-				this,
-			),
+			this,
 		);
+		this.addSettingTab(this.settingsTab);
 
 		this.registerView(
 			SYNC_PANEL_VIEW_TYPE,
@@ -106,6 +134,7 @@ export default class GitSyncPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			// A short delay so the vault index is populated before the first scan.
 			window.setTimeout(() => {
+				void this.probeConnection();
 				void this.syncManager.onActivation();
 			}, 1500);
 		});
@@ -164,54 +193,117 @@ export default class GitSyncPlugin extends Plugin {
 		return Boolean(githubOwner && githubRepo && token);
 	}
 
+	getConnectionState(): ConnectionState {
+		return this.connectionState;
+	}
+
+	private setConnectionState(state: ConnectionState): void {
+		this.connectionState = state;
+		this.refreshSettingsTab();
+	}
+
+	/** The settings tab redraws itself when the connection verdict changes. */
+	private refreshSettingsTab(): void {
+		this.settingsTab?.display();
+	}
+
 	/**
-	 * Save. Proves the credentials reach the repository before keeping them,
-	 * then compares this vault against it. A silent connection test, so the
-	 * user is told once what is wrong rather than after every later failure.
+	 * One question answered in one request: can we reach this repository right
+	 * now. Network, credentials and repository all fail into the same place, so
+	 * they are reported together rather than as separate concepts.
+	 *
+	 * A repository with no commits has no branch to read, which is a success:
+	 * there is simply nothing there yet.
 	 */
-	private async applyCredentials(draft: CredentialDraft): Promise<void> {
-		if (!draft.githubOwner || !draft.githubRepo || !draft.token) {
-			new Notice('GitSync: owner, repository and token are all required.');
-			return;
+	private async probeConnection(
+		credentials: CredentialDraft = this.settings,
+	): Promise<{ ok: boolean; message?: string }> {
+		if (!credentials.githubOwner || !credentials.githubRepo || !credentials.token) {
+			this.setConnectionState('incomplete');
+			return { ok: false, message: 'Owner, repository and token are all required.' };
 		}
 
+		this.setConnectionState('checking');
 		const { GitHubClient } = await import('./github/GitHubClient');
 		const client = new GitHubClient(
-			draft.githubOwner.trim(),
-			draft.githubRepo.trim(),
-			draft.token,
-			draft.branch.trim() || 'main',
+			credentials.githubOwner.trim(),
+			credentials.githubRepo.trim(),
+			credentials.token,
+			credentials.branch.trim() || 'main',
 		);
 
 		try {
-			// An empty repository has no branch to read, which is a valid state
-			// here rather than a failed credential.
 			await client.getBranchReferenceOrNull(true);
+			this.setConnectionState('healthy');
+			return { ok: true };
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Connection failed.';
 			console.error('[GitSync]', error);
-			new Notice(`GitSync: not saved. ${message}`);
-			this.setStatus('error', message);
+			this.setConnectionState('failed');
+			return { ok: false, message: describeConnectionFailure(error) };
+		}
+	}
+
+	/**
+	 * Save. The credentials are always stored, because losing what someone
+	 * typed is worse than storing something that does not work yet. What a
+	 * failed check withholds is automatic synchronization, not the settings.
+	 */
+	private async applyCredentials(draft: CredentialDraft): Promise<void> {
+		Object.assign(this.settings, draft);
+		await this.persistEverything();
+
+		const probe = await this.probeConnection(draft);
+		if (!probe.ok) {
+			new Notice(`GitSync: ${probe.message}`, 12000);
+			await this.disableSync();
 			return;
 		}
 
-		Object.assign(this.settings, draft);
-		await this.persistEverything();
 		await this.runSetupCheck();
 	}
 
 	private async setSyncEnabled(enabled: boolean): Promise<void> {
-		this.settings.syncEnabled = enabled;
-		await this.persistEverything();
-
 		if (!enabled) {
+			this.settings.syncEnabled = false;
+			await this.persistEverything();
 			this.setStatus('pending', 'Synchronization is off.');
 			return;
 		}
-		// Turning it back on asks the same question again, from scratch.
+
+		// Turning it on is a promise that it will work, so prove it first.
+		const probe = await this.probeConnection();
+		if (!probe.ok) {
+			new Notice(`GitSync: ${probe.message}`, 12000);
+			this.settings.syncEnabled = false;
+			await this.persistEverything();
+			this.setStatus('error', probe.message ?? 'Not connected.');
+			return;
+		}
+
+		this.settings.syncEnabled = true;
+		await this.persistEverything();
+
 		if (this.syncManager.needsStartingPoint()) {
 			await this.runSetupCheck();
 		}
+	}
+
+	/** Clears credentials and all synchronization bookkeeping. Files are kept. */
+	private async resetEverything(): Promise<void> {
+		this.syncManager?.destroy();
+
+		const deviceId = this.state.deviceId;
+		this.settings = { ...DEFAULT_SETTINGS };
+		this.state = { ...DEFAULT_STATE, deviceId };
+		await this.persistEverything();
+
+		this.settings.syncEnabled = false;
+		await this.persistEverything();
+
+		this.restartSyncManager();
+		this.setConnectionState('incomplete');
+		this.setStatus('pending', 'Reset. Enter your GitHub details to begin.');
+		new Notice('GitSync: credentials and settings cleared. Your files were not touched.');
 	}
 
 	// Runs the comparison and puts the outcome to the user. Nothing is written
@@ -244,9 +336,10 @@ export default class GitSyncPlugin extends Plugin {
 				}
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Check failed.';
+			const message = describeConnectionFailure(error);
 			console.error('[GitSync]', error);
-			new Notice(`GitSync: ${message}`);
+			new Notice(`GitSync: ${message}`, 12000);
+			this.setConnectionState('failed');
 			this.setStatus('error', message);
 			await this.disableSync();
 			return;
@@ -267,8 +360,6 @@ export default class GitSyncPlugin extends Plugin {
 			return;
 		}
 
-		// Both remaining decisions are the two starting points the plugin already
-		// knows how to establish.
 		if (decision === 'pull') {
 			await this.syncManager.adoptRemote();
 		} else {
@@ -280,6 +371,18 @@ export default class GitSyncPlugin extends Plugin {
 		this.settings.syncEnabled = false;
 		await this.persistEverything();
 		this.setStatus('pending', 'Synchronization is off.');
+	}
+
+	private confirmReset(): void {
+		new ConfirmModal(
+			this.app,
+			'Reset all credentials and plugin settings?',
+			'You will need to re-enter the GitHub owner, repository and personal access token. Your notes are not touched and nothing is deleted from GitHub.',
+			'Proceed',
+			() => {
+				void this.resetEverything();
+			},
+		).open();
 	}
 
 	private registerCommands(): void {
@@ -471,26 +574,6 @@ export default class GitSyncPlugin extends Plugin {
 	private restartSyncManager(): void {
 		this.syncManager = this.createSyncManager();
 		this.syncManager.startPolling();
-	}
-
-	async testConnection(): Promise<void> {
-		const { GitHubClient } = await import('./github/GitHubClient');
-		try {
-			const client = new GitHubClient(
-				this.settings.githubOwner.trim(),
-				this.settings.githubRepo.trim(),
-				this.settings.token,
-				this.settings.branch.trim() || 'main',
-			);
-			const ref = await client.testConnection();
-			new Notice(`GitSync: connected. ${ref.ref} → ${ref.object.sha.slice(0, 12)}`);
-			this.setStatus('synced', 'GitHub connection successful.');
-		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Connection test failed.';
-			console.error('[GitSync]', error);
-			new Notice(`GitSync: ${message}`);
-			this.setStatus('error', message);
-		}
 	}
 
 	private updateStateReference(): void {

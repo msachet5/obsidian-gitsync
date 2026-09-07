@@ -1,5 +1,6 @@
-import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import {
+	ConnectionState,
 	GitSyncSettings,
 	PUSH_DELAY_SECONDS,
 	SUPPORTED_EXTENSIONS,
@@ -22,7 +23,9 @@ export interface SettingsHost {
 	/** Turning this on re-runs the setup check. */
 	setSyncEnabled(enabled: boolean): Promise<void>;
 	hasCredentials(): boolean;
-	testConnection(): Promise<void>;
+	getConnectionState(): ConnectionState;
+	/** Asks before clearing credentials and sync bookkeeping. */
+	confirmReset(): void;
 	pushNow(): Promise<void>;
 	resetSyncState(): Promise<void>;
 	getDeviceId(): string;
@@ -58,10 +61,49 @@ export class SettingsTab extends PluginSettingTab {
 		return { githubOwner, githubRepo, branch, token };
 	}
 
+	private allFieldsFilled(): boolean {
+		return Boolean(this.draft.githubOwner && this.draft.githubRepo && this.draft.token);
+	}
+
+	private isDirty(): boolean {
+		const saved = this.draftFromSettings();
+		return (
+			saved.githubOwner !== this.draft.githubOwner ||
+			saved.githubRepo !== this.draft.githubRepo ||
+			saved.branch !== this.draft.branch ||
+			saved.token !== this.draft.token
+		);
+	}
+
+	private renderHeader(containerEl: HTMLElement): void {
+		const header = containerEl.createDiv({ cls: 'gitsync-header' });
+
+		const state = this.host.getConnectionState();
+		const copy: Record<ConnectionState, { text: string; tone: string }> = {
+			healthy: { text: 'Connection healthy', tone: 'green' },
+			checking: { text: 'Checking connection…', tone: 'orange' },
+			incomplete: { text: 'Complete setup', tone: 'orange' },
+			failed: { text: 'Not connected', tone: 'red' },
+		};
+		const { text, tone } = copy[state];
+
+		const status = header.createDiv({ cls: 'gitsync-conn' });
+		status.createSpan({ cls: `gitsync-dot gitsync-dot-${tone}` });
+		status.createSpan({ text });
+
+		const reset = header.createEl('button', { cls: 'gitsync-reset' });
+		setIcon(reset, 'rotate-ccw');
+		reset.setAttribute('aria-label', 'Reset all credentials and plugin settings');
+		reset.setAttribute('title', 'Reset all credentials and plugin settings');
+		reset.addEventListener('click', () => this.host.confirmReset());
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
 		this.draft = this.saving ? this.draft : this.draftFromSettings();
+
+		this.renderHeader(containerEl);
 
 		containerEl.createEl('p', {
 			text: 'Settings and synchronization state are local to this installation.',
@@ -99,7 +141,8 @@ export class SettingsTab extends PluginSettingTab {
 		el.setAttribute('aria-disabled', String(dimmed));
 	}
 
-	private renderCredentials(containerEl: HTMLElement): void {
+	private renderCredentials(parent: HTMLElement): void {
+		const containerEl = parent.createDiv({ cls: 'gitsync-box' });
 		new Setting(containerEl).setName('GitHub').setHeading();
 
 		new Setting(containerEl)
@@ -111,6 +154,7 @@ export class SettingsTab extends PluginSettingTab {
 					.setValue(this.draft.githubOwner)
 					.onChange((value) => {
 						this.draft.githubOwner = value.trim();
+						this.refreshSaveButton();
 					}),
 			);
 
@@ -123,6 +167,7 @@ export class SettingsTab extends PluginSettingTab {
 					.setValue(this.draft.githubRepo)
 					.onChange((value) => {
 						this.draft.githubRepo = value.trim();
+						this.refreshSaveButton();
 					}),
 			);
 
@@ -132,6 +177,7 @@ export class SettingsTab extends PluginSettingTab {
 			.addText((text) =>
 				text.setValue(this.draft.branch).onChange((value) => {
 					this.draft.branch = value.trim() || 'main';
+					this.refreshSaveButton();
 				}),
 			);
 
@@ -147,20 +193,27 @@ export class SettingsTab extends PluginSettingTab {
 					.setValue(this.draft.token)
 					.onChange((value) => {
 						this.draft.token = value.trim();
+						this.refreshSaveButton();
 					});
 			});
 
 		this.renderTokenHelp(containerEl);
 
+		const filled = this.allFieldsFilled();
+		const dirty = this.isDirty();
+		const settled = filled && !dirty && this.host.hasCredentials();
+
 		new Setting(containerEl)
+			.setClass('gitsync-save')
 			.setName('Save')
 			.setDesc(
-				'Stores these details, then compares this vault against the repository before anything is synchronized.',
+				'Stores these details, checks the connection in the background, then compares this vault against the repository.',
 			)
 			.addButton((button) => {
+				const label = this.saving ? 'Checking…' : settled ? 'Saved' : 'Save';
 				button
-					.setButtonText(this.saving ? 'Checking…' : 'Save')
-					.setDisabled(this.saving)
+					.setButtonText(label)
+					.setDisabled(this.saving || !filled || settled)
 					.onClick(async () => {
 						if (this.saving) return;
 						this.saving = true;
@@ -172,16 +225,23 @@ export class SettingsTab extends PluginSettingTab {
 							this.display();
 						}
 					});
-				if (!this.saving) button.setCta();
-			})
-			.addButton((button) =>
-				button
-					.setButtonText('Test connection')
-					.setDisabled(this.saving)
-					.onClick(async () => {
-						await this.host.testConnection();
-					}),
-			);
+				if (!this.saving && filled && !settled) button.setCta();
+			});
+	}
+
+	/**
+	 * Redraws only what the Save button depends on. A full display() would
+	 * rebuild the inputs and steal focus on every keystroke.
+	 */
+	private refreshSaveButton(): void {
+		const filled = this.allFieldsFilled();
+		const settled = filled && !this.isDirty() && this.host.hasCredentials();
+		const button = this.containerEl.querySelector<HTMLButtonElement>('.gitsync-save button');
+		if (!button) return;
+
+		button.textContent = this.saving ? 'Checking…' : settled ? 'Saved' : 'Save';
+		button.disabled = this.saving || !filled || settled;
+		button.toggleClass('mod-cta', !this.saving && filled && !settled);
 	}
 
 	private renderTokenHelp(containerEl: HTMLElement): void {

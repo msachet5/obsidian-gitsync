@@ -182,10 +182,6 @@ export class GitHubClient {
 		}
 	}
 
-	async testConnection(): Promise<GitReference> {
-		return this.getBranchReference(true);
-	}
-
 	// The branch head is read on every poll, so it is fetched conditionally.
 	// GitHub answers an unchanged ref with 304 Not Modified, which carries no
 	// body and does not count against the rate limit. If the ETag header is ever
