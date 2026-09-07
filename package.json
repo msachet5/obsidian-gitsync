@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-ultisync",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "Synchronize selected vault files with a GitHub repository using the GitHub REST API.",
 	"main": "main.js",
 	"type": "module",
