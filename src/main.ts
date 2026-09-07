@@ -588,8 +588,9 @@ export default class GitSyncPlugin extends Plugin {
 			'Reset and re-pull from GitHub?\n\n' +
 				`${managed.length} file(s) matching your Pull or Push extensions will be removed and downloaded again from GitHub. Ignored paths are left alone.\n\n` +
 				(keepCopies
-					? "Recycle bin is on, so the current copies are moved to the vault's .trash folder first.\n\n"
-					: 'Recycle bin is off, so no copies are kept. Any local change that was never pushed will be lost permanently.\n\n') +
+					? "Recycle bin is on, so the current copies go to the vault's .trash folder.\n\n"
+					: 'Recycle bin is off, so the current copies go to your system trash.\n\n') +
+				'Either way, a local change that was never pushed does not come back from GitHub.\n\n' +
 				'GitHub itself is not modified.\n\nContinue?',
 		);
 		if (!confirmed) {
@@ -602,11 +603,11 @@ export default class GitSyncPlugin extends Plugin {
 
 		try {
 			for (const file of managed) {
-				// With the recycle bin on the copies are kept in the vault's own
-				// .trash; with it off there is nothing to keep, because every one
-				// of these files is about to be downloaded again.
-				if (keepCopies) await this.app.vault.trash(file, false);
-				else await this.app.vault.delete(file);
+				// Same rule as every other deletion in the plugin: the recycle bin
+				// chooses between the vault's own .trash and the system one.
+				// Nothing here deletes outright, because a file that was edited
+				// locally and never pushed does not come back from GitHub.
+				await this.app.vault.trash(file, !keepCopies);
 			}
 		} catch (error) {
 			console.error('[GitSync]', error);

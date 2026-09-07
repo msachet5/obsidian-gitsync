@@ -380,9 +380,13 @@ export class SettingsTab extends PluginSettingTab {
 	private resetDescription(): string {
 		const scope =
 			'Affects only files matching your Pull or Push extensions; ignored paths are left alone. GitHub is not modified.';
-		return this.host.settings.recycleBin
-			? `Removes this vault's synced files to the vault's .trash folder, then downloads them again from GitHub. ${scope}`
-			: `Removes this vault's synced files and downloads them again from GitHub. No copies are kept, so any local change that was never pushed is lost. Turn on Recycle bin first if you want copies. ${scope}`;
+		const destination = this.host.settings.recycleBin
+			? "the vault's .trash folder"
+			: 'your system trash';
+		return (
+			`Removes this vault's synced files to ${destination}, then downloads them again from GitHub. ` +
+			`A local change that was never pushed does not come back. ${scope}`
+		);
 	}
 
 	private renderDevice(containerEl: HTMLElement): void {
