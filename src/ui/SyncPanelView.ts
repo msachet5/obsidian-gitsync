@@ -1,5 +1,14 @@
 import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
-import { ActivityEntry, ActivityKind, SyncStateData, SyncStatus } from '../types';
+import {
+	ActivityEntry,
+	ActivityKind,
+	PushCountdown,
+	SyncProgress,
+	SyncStateData,
+	SyncStatus,
+	countdownFraction,
+	progressPercent,
+} from '../types';
 
 export const SYNC_PANEL_VIEW_TYPE = 'ultisync-panel';
 
@@ -8,9 +17,18 @@ export interface PanelHost {
 	getStatus(): { status: SyncStatus; detail?: string };
 	getState(): SyncStateData;
 	getActivity(): ActivityEntry[];
+	/** Read on a timer rather than pushed, so the bar and the ring can move
+	 *  without rebuilding the panel underneath them. */
+	getProgress(): SyncProgress | null;
+	getPushCountdown(): PushCountdown | null;
 	openConflicts(): void;
 	openSettings(): void;
 }
+
+const PHASE_VERB: Record<SyncProgress['phase'], string> = {
+	pull: 'Pulling',
+	push: 'Pushing',
+};
 
 const STATUS_COPY: Record<SyncStatus, { label: string; hint: string }> = {
 	setup: { label: 'Not set up', hint: 'No repository connected yet.' },
@@ -60,6 +78,13 @@ export class SyncPanelView extends ItemView {
 	// rebuild happens when something actually changes.
 	private timeNodes: TimeNode[] = [];
 
+	// The moving parts of the status card. Held so a transfer can advance and a
+	// countdown drain without a rebuild, for the same reason the times are.
+	private donutEl: HTMLElement | null = null;
+	private progressEl: HTMLElement | null = null;
+	private progressFillEl: HTMLElement | null = null;
+	private progressTextEl: HTMLElement | null = null;
+
 	constructor(
 		leaf: WorkspaceLeaf,
 		private host: PanelHost,
@@ -104,6 +129,7 @@ export class SyncPanelView extends ItemView {
 		const heading = card.createDiv({ cls: 'ghs-status-heading' });
 		heading.createSpan({ cls: 'ghs-dot' });
 		heading.createSpan({ cls: 'ghs-status-label', text: copy.label });
+		this.donutEl = heading.createSpan({ cls: 'ultisync-donut' });
 
 		// Settings belong beside the state they change, not in a row of their
 		// own competing with the one action that is ever urgent here.
@@ -113,6 +139,13 @@ export class SyncPanelView extends ItemView {
 		gear.setAttribute('title', 'Open UltiSync settings');
 		gear.addEventListener('click', () => this.host.openSettings());
 		card.createDiv({ cls: 'ghs-status-detail', text: detail || copy.hint });
+
+		// A first pull of a large vault is minutes of apparently nothing. The
+		// bar is the difference between waiting and wondering whether it hung.
+		this.progressEl = card.createDiv({ cls: 'ghs-progress' });
+		this.progressFillEl = this.progressEl.createDiv({ cls: 'ghs-progress-fill' });
+		this.progressTextEl = card.createDiv({ cls: 'ghs-progress-text' });
+		this.paintProgress();
 
 		const conflictCount = Object.keys(state.conflicts).length;
 		const trackedCount = Object.keys(state.trackedFiles).length;
@@ -178,6 +211,39 @@ export class SyncPanelView extends ItemView {
 				at: entry.at,
 			});
 		}
+	}
+
+	/**
+	 * Repaints only what moves between renders. Called on every tick while a
+	 * transfer or a countdown is live, so it must stay cheap and must cope with
+	 * being called before the first render has built anything.
+	 */
+	paintProgress(): void {
+		const progress = this.host.getProgress();
+		const countdown = this.host.getPushCountdown();
+
+		if (this.donutEl) {
+			this.donutEl.toggle(countdown !== null);
+			if (countdown) {
+				this.donutEl.style.setProperty('--ultisync-donut', String(countdownFraction(countdown)));
+				this.donutEl.setAttribute(
+					'aria-label',
+					`Pushing in ${Math.ceil(countdown.remaining / 1000)}s`,
+				);
+			}
+		}
+
+		if (!this.progressEl || !this.progressFillEl || !this.progressTextEl) return;
+
+		this.progressEl.toggle(progress !== null);
+		this.progressTextEl.toggle(progress !== null);
+		if (!progress) return;
+
+		const percent = progressPercent(progress);
+		this.progressFillEl.style.width = `${percent}%`;
+		this.progressTextEl.setText(
+			`${PHASE_VERB[progress.phase]} ${progress.done} of ${progress.total} file(s) — ${percent}%`,
+		);
 	}
 
 	private fact(parent: HTMLElement, label: string, value: string): void {

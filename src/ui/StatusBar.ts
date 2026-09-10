@@ -1,5 +1,11 @@
 import { Plugin, Workspace } from 'obsidian';
-import { SyncStatus } from '../types';
+import {
+	PushCountdown,
+	SyncProgress,
+	SyncStatus,
+	countdownFraction,
+	progressPercent,
+} from '../types';
 
 const LABELS: Record<SyncStatus, string> = {
 	setup: '⚙ UltiSync setup needed',
@@ -13,8 +19,18 @@ const LABELS: Record<SyncStatus, string> = {
 	error: '✕ UltiSync not working',
 };
 
+const PHASE_VERB: Record<SyncProgress['phase'], string> = {
+	pull: 'Pulling',
+	push: 'Pushing',
+};
+
 export class StatusBarController {
 	private readonly item: HTMLElement;
+
+	private status: SyncStatus = 'synced';
+	private detail: string | undefined;
+	private progress: SyncProgress | null = null;
+	private countdown: PushCountdown | null = null;
 
 	constructor(
 		plugin: Plugin,
@@ -34,7 +50,53 @@ export class StatusBarController {
 	}
 
 	set(status: SyncStatus, detail?: string): void {
-		this.item.setText(LABELS[status]);
-		this.item.setAttribute('title', detail ?? LABELS[status]);
+		this.status = status;
+		this.detail = detail;
+		this.paint();
+	}
+
+	/** The two things that move on their own, repainted without a full redraw. */
+	setProgress(progress: SyncProgress | null, countdown: PushCountdown | null): void {
+		this.progress = progress;
+		this.countdown = countdown;
+		this.paint();
+	}
+
+	private paint(): void {
+		this.item.empty();
+
+		// The ring drains through the delay before a push, so the wait reads as
+		// a wait rather than as nothing happening. An edit re-arms the timer and
+		// it starts again from full.
+		if (this.countdown) {
+			const donut = this.item.createSpan({ cls: 'ultisync-donut' });
+			donut.style.setProperty('--ultisync-donut', String(countdownFraction(this.countdown)));
+			donut.setAttribute(
+				'aria-label',
+				`Pushing in ${Math.ceil(this.countdown.remaining / 1000)}s`,
+			);
+		}
+
+		this.item.createSpan({ text: this.label() });
+		this.item.setAttribute('title', this.title());
+	}
+
+	private label(): string {
+		if (!this.progress) return LABELS[this.status];
+
+		const { done, total, phase } = this.progress;
+		const arrow = phase === 'pull' ? '↓' : '↑';
+		return `${arrow} ${PHASE_VERB[phase]} ${done}/${total}`;
+	}
+
+	private title(): string {
+		if (this.progress) {
+			const { done, total, phase } = this.progress;
+			return `${PHASE_VERB[phase]} ${done} of ${total} file(s) — ${progressPercent(this.progress)}%`;
+		}
+		if (this.countdown) {
+			return `Pushing in ${Math.ceil(this.countdown.remaining / 1000)}s. Editing restarts the wait.`;
+		}
+		return this.detail ?? LABELS[this.status];
 	}
 }

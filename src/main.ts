@@ -18,6 +18,7 @@ import {
 	LARGE_CHECK_BYTES,
 	UltiSyncSettings,
 	PersistedData,
+	PROGRESS_TICK_MS,
 	SyncStateData,
 	SyncStatus,
 } from './types';
@@ -95,6 +96,10 @@ export default class UltiSyncPlugin extends Plugin {
 
 	private connectionState: ConnectionState = 'incomplete';
 
+	// Whether the last paint drew a bar or a ring, so the idle ticks can stop
+	// early but the one tick that clears them still lands.
+	private progressPainted = false;
+
 	async onload(): Promise<void> {
 		setConfigDir(this.app.vault.configDir);
 		await this.loadSettingsAndState();
@@ -133,6 +138,8 @@ export default class UltiSyncPlugin extends Plugin {
 					getStatus: () => this.statusSnapshot(),
 					getState: () => this.state,
 					getActivity: () => this.syncManager.getActivity(),
+					getProgress: () => this.syncManager.getProgress(),
+					getPushCountdown: () => this.syncManager.getPushCountdown(),
 					openConflicts: () => new ConflictModal(this.app, this.syncManager).open(),
 					openSettings: () => this.openSettings(),
 				}),
@@ -141,6 +148,11 @@ export default class UltiSyncPlugin extends Plugin {
 		this.addRibbonIcon('refresh-cw', 'UltiSync status', () => {
 			void this.revealPanel();
 		});
+
+		// The countdown has to drain on its own clock: nothing fires per frame to
+		// announce that time has passed. The paint is a no-op once both are idle,
+		// so the interval costs nothing while the plugin is at rest.
+		this.registerInterval(window.setInterval(() => this.paintProgress(), PROGRESS_TICK_MS));
 
 		this.registerCommands();
 		this.registerVaultEvents();
@@ -170,6 +182,7 @@ export default class UltiSyncPlugin extends Plugin {
 			this.state,
 			(status, detail) => this.setStatus(status, detail),
 			() => this.updateStateReference(),
+			() => this.paintProgress(),
 			(message) => {
 				void this.handleUnrecoverableError(message);
 			},
@@ -210,6 +223,26 @@ export default class UltiSyncPlugin extends Plugin {
 
 		await leaf.setViewState({ type: SYNC_PANEL_VIEW_TYPE, active: true });
 		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * Repaints the progress bar and the push countdown where they stand, rather
+	 * than redrawing anything. Called several times a second while either is
+	 * live, and short-circuited when neither is.
+	 */
+	private paintProgress(): void {
+		const progress = this.syncManager.getProgress();
+		const countdown = this.syncManager.getPushCountdown();
+
+		const active = progress !== null || countdown !== null;
+		if (!active && !this.progressPainted) return;
+		this.progressPainted = active;
+
+		this.statusBar.setProgress(progress, countdown);
+		for (const leaf of this.app.workspace.getLeavesOfType(SYNC_PANEL_VIEW_TYPE)) {
+			const view = leaf.view;
+			if (view instanceof SyncPanelView) view.paintProgress();
+		}
 	}
 
 	// Every status change and every state refresh redraws the panel. It is the

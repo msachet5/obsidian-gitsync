@@ -2,6 +2,11 @@ export const PULL_INTERVAL_MS = 5000;
 export const POLL_HOLD_AFTER_PUSH_MS = 10000;
 export const PUSH_DELAY_SECONDS = 5;
 export const ACTIVITY_LIMIT = 30;
+
+/** How often the progress bar and the push countdown are repainted. Fast
+ *  enough that a five-second ring drains smoothly, cheap enough to run while
+ *  nothing is happening: the paint returns immediately when both are idle. */
+export const PROGRESS_TICK_MS = 100;
 export const NEW_FILE_SETTLE_MS = 60000;
 
 /** sha1 of an empty blob, and of an empty tree. Both are fixed Git constants. */
@@ -175,6 +180,41 @@ export type SyncStatus =
 	| 'synced'
 	| 'conflict'
 	| 'error';
+
+/**
+ * How far a transfer has got. Files rather than bytes: a pull of forty notes
+ * and one attachment is forty-one steps to the person watching it, whatever
+ * the byte totals say.
+ */
+export interface SyncProgress {
+	phase: 'pull' | 'push';
+	done: number;
+	total: number;
+}
+
+/** A push waiting out the debounce window, and how much of it is left. */
+export interface PushCountdown {
+	/** Milliseconds still to wait. */
+	remaining: number;
+	/** The full window this countdown started from. */
+	total: number;
+}
+
+/** Whole percent complete, clamped so a miscount cannot read past 100. */
+export function progressPercent(progress: SyncProgress): number {
+	if (progress.total <= 0) return 0;
+	return Math.min(100, Math.round((progress.done / progress.total) * 100));
+}
+
+/**
+ * How much of the countdown ring is still filled: 1 the moment it is armed,
+ * 0 when the push goes. Clamped, because a tick can land a little past the
+ * deadline.
+ */
+export function countdownFraction(countdown: PushCountdown): number {
+	if (countdown.total <= 0) return 0;
+	return Math.min(1, Math.max(0, countdown.remaining / countdown.total));
+}
 
 export type ActivityKind = 'info' | 'pull' | 'push' | 'merge' | 'conflict' | 'error';
 

@@ -17,8 +17,10 @@ import {
 	POLL_HOLD_AFTER_PUSH_MS,
 	PULL_INTERVAL_MS,
 	PUSH_DELAY_SECONDS,
+	PushCountdown,
 	PushTrigger,
 	SELF_WRITE_GRACE_MS,
+	SyncProgress,
 	SyncStateData,
 	SyncStatus,
 } from '../types';
@@ -128,6 +130,13 @@ export class SyncManager {
 
 	private activity: ActivityEntry[] = [];
 
+	// How far the transfer in flight has got, and when the armed push is due.
+	// Both change far too often to redraw the whole panel for, so they are read
+	// by the two things that paint them rather than pushed through refreshUI().
+	private progress: SyncProgress | null = null;
+	private pushDueAt: number | null = null;
+	private pushWindowMs = 0;
+
 	// The last error already announced. A failing token or an exhausted rate
 	// limit repeats on every poll, and a notice each time would be unusable.
 	private lastErrorMessage: string | null = null;
@@ -144,6 +153,9 @@ export class SyncManager {
 		private state: SyncStateData,
 		private setStatus: (status: SyncStatus, detail: string) => void,
 		private refreshUI: () => void,
+		/** Called far more often than refreshUI, for the pieces that can be
+		 *  repainted on their own: the progress bar and the countdown. */
+		private onProgress: () => void = () => undefined,
 		/** Called for a problem that cannot clear on its own, never for one that
 		 *  can. */
 		private onRequiresAttention: (message: string) => void = () => undefined,
@@ -159,6 +171,49 @@ export class SyncManager {
 
 	getActivity(): ActivityEntry[] {
 		return this.activity;
+	}
+
+	/** What is moving right now, or null when nothing is. */
+	getProgress(): SyncProgress | null {
+		return this.progress;
+	}
+
+	/**
+	 * The push waiting out its delay, or null when none is armed. Read on a
+	 * timer by whatever is drawing the countdown, so it reports the remaining
+	 * time rather than announcing each tick.
+	 */
+	getPushCountdown(): PushCountdown | null {
+		if (this.pushDueAt === null) return null;
+		const remaining = this.pushDueAt - Date.now();
+		if (remaining <= 0) return null;
+		return { remaining, total: this.pushWindowMs };
+	}
+
+	/** Reports file counts while a transfer runs, and clears them after. */
+	private reportProgress(phase: 'pull' | 'push', done: number, total: number): void {
+		this.progress = total > 0 ? { phase, done, total } : null;
+		this.onProgress();
+	}
+
+	private clearProgress(): void {
+		if (this.progress === null) return;
+		this.progress = null;
+		this.onProgress();
+	}
+
+	/** A PullManager wired to report where it has got to. */
+	private pullManager(github: GitHubClient): PullManager {
+		return new PullManager(this.app, github, this.settings, (done, total) =>
+			this.reportProgress('pull', done, total),
+		);
+	}
+
+	/** A PushManager wired the same way. */
+	private pushManager(github: GitHubClient): PushManager {
+		return new PushManager(this.vault, github, this.settings, (done, total) =>
+			this.reportProgress('push', done, total),
+		);
 	}
 
 	// Naming a note is the user finishing what Obsidian started. Until that
@@ -343,6 +398,7 @@ export class SyncManager {
 			this.handleError(error);
 		} finally {
 			this.running = false;
+			this.clearProgress();
 		}
 	}
 
@@ -359,7 +415,7 @@ export class SyncManager {
 			const commit = await github.getCommit(ref.object.sha);
 			const remote = await github.readTreeSnapshot(commit.sha, commit.tree.sha);
 
-			const pull = new PullManager(this.app, github, this.settings);
+			const pull = this.pullManager(github);
 			const result = await pull.adoptRemote(remote, this.state, (paths) =>
 				confirmWithModal(this.app, {
 					title: 'Replace local files with the GitHub versions?',
@@ -396,6 +452,7 @@ export class SyncManager {
 			this.handleError(error);
 		} finally {
 			this.running = false;
+			this.clearProgress();
 		}
 	}
 
@@ -412,7 +469,7 @@ export class SyncManager {
 			const commit = await github.getCommit(ref.object.sha);
 			const remote = await github.readTreeSnapshot(commit.sha, commit.tree.sha);
 
-			const pull = new PullManager(this.app, github, this.settings);
+			const pull = this.pullManager(github);
 			const result = await pull.performInitialPull(remote, this.state, overwriteExisting);
 
 			const now = new Date().toISOString();
@@ -436,6 +493,7 @@ export class SyncManager {
 			this.handleError(error);
 		} finally {
 			this.running = false;
+			this.clearProgress();
 			await this.runRequestedIfNeeded();
 		}
 	}
@@ -453,6 +511,7 @@ export class SyncManager {
 			this.handleError(error);
 		} finally {
 			this.running = false;
+			this.clearProgress();
 			await this.runRequestedIfNeeded();
 		}
 	}
@@ -470,6 +529,7 @@ export class SyncManager {
 			this.handleError(error);
 		} finally {
 			this.running = false;
+			this.clearProgress();
 			await this.runRequestedIfNeeded();
 		}
 	}
@@ -495,6 +555,7 @@ export class SyncManager {
 			this.handleError(error);
 		} finally {
 			this.running = false;
+			this.clearProgress();
 			await this.runRequestedIfNeeded();
 		}
 	}
@@ -515,6 +576,7 @@ export class SyncManager {
 			}
 		} finally {
 			this.running = false;
+			this.clearProgress();
 			await this.runRequestedIfNeeded();
 		}
 	}
@@ -660,7 +722,7 @@ export class SyncManager {
 	/** Returns the commit this push created, or null when nothing was pushed. */
 	private async performPushInternal(trigger: PushTrigger): Promise<string | null> {
 		const github = this.getClient();
-		const push = new PushManager(this.vault, github, this.settings);
+		const push = this.pushManager(github);
 
 		const result = await push.push(this.state, {
 			// Adoption is the one push that must not delete: nothing was tracked
@@ -934,7 +996,7 @@ export class SyncManager {
 		);
 
 		this.markSelfWrite(...safeRemoteChanged, ...safeRemoteDeleted);
-		const pull = new PullManager(this.app, github, this.settings);
+		const pull = this.pullManager(github);
 		const pullResult = await pull.applyRemoteChanges(
 			remote,
 			this.state,
@@ -1291,7 +1353,7 @@ export class SyncManager {
 		const ref = await github.getBranchReference();
 		const commit = await github.getCommit(ref.object.sha);
 		const remote = await github.readTreeSnapshot(ref.object.sha, commit.tree.sha);
-		const pull = new PullManager(this.app, github, this.settings);
+		const pull = this.pullManager(github);
 
 		if (remote.entries.has(path)) {
 			await pull.applyRemoteChanges(remote, this.state, new Set([path]), new Set());
@@ -1377,14 +1439,27 @@ export class SyncManager {
 		);
 	}
 
+	// Re-arming restarts the countdown from full, which is the whole point of a
+	// debounce: an edit made with two seconds left buys another five.
 	private armPushTimer(delay: number, run: () => void): void {
 		if (this.pushTimer) {
 			window.clearTimeout(this.pushTimer);
 		}
+		this.pushDueAt = Date.now() + delay;
+		this.pushWindowMs = delay;
+		this.onProgress();
 		this.pushTimer = window.setTimeout(() => {
 			this.pushTimer = null;
+			this.clearPushCountdown();
 			run();
 		}, delay);
+	}
+
+	private clearPushCountdown(): void {
+		if (this.pushDueAt === null) return;
+		this.pushDueAt = null;
+		this.pushWindowMs = 0;
+		this.onProgress();
 	}
 
 	private async checkRemote(): Promise<void> {
@@ -1500,5 +1575,7 @@ export class SyncManager {
 			window.clearTimeout(this.pushTimer);
 			this.pushTimer = null;
 		}
+		this.clearPushCountdown();
+		this.clearProgress();
 	}
 }

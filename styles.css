@@ -1,6 +1,9 @@
 .ultisync-status {
   cursor: pointer;
   user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .ultisync-conflict {
@@ -466,4 +469,52 @@
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   word-break: break-all;
+}
+
+/* ---------------------------------------------------------------------------
+   Transfer progress and the push countdown
+   Both move on their own clock rather than on an event, so both are painted by
+   setting a custom property on an element that is already there.
+   --------------------------------------------------------------------------- */
+
+/* --ultisync-donut runs 1 -> 0 across the delay before a push. The conic
+   gradient turns that into a ring that drains; the mask punches out the middle,
+   which is what makes it a donut rather than a pie. Editing re-arms the timer
+   and the ring goes back to full. */
+.ultisync-donut {
+  --ultisync-donut: 1;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--interactive-accent) calc(var(--ultisync-donut) * 360deg),
+    var(--background-modifier-border) 0
+  );
+  -webkit-mask: radial-gradient(circle, transparent 48%, #000 49%);
+  mask: radial-gradient(circle, transparent 48%, #000 49%);
+}
+
+.ultisync-panel .ghs-progress {
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+.ultisync-panel .ghs-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--interactive-accent);
+  /* Just enough to smooth the step between files, not enough to lag behind
+     the count printed underneath it. */
+  transition: width 120ms linear;
+}
+
+.ultisync-panel .ghs-progress-text {
+  margin-top: 4px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
 }
