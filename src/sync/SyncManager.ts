@@ -1,4 +1,4 @@
-import { App, Notice, TFile, Vault } from 'obsidian';
+import { App, Notice, Platform, TFile, Vault } from 'obsidian';
 import {
 	GitHubApiError,
 	GitHubClient,
@@ -25,10 +25,12 @@ import {
 	SyncProgress,
 	SyncStateData,
 	SyncStatus,
+	VERIFY_INTERVAL_MS,
 } from '../types';
 import {
 	isIgnoredPath,
 	isSafeVaultPath,
+	isWritableOnThisPlatform,
 	matchesExtensions,
 	normalizePath,
 } from '../vault/PathFilter';
@@ -40,6 +42,7 @@ import { attemptMerge } from './MergeAttempt';
 import { PullManager } from './PullManager';
 import { PushManager } from './PushManager';
 import { renamesDeclaredIn } from './RenameRecord';
+import { pathsNeverPulled } from './Verify';
 import { ProgressCallback, SetupCheck, SetupCheckResult } from './SetupCheck';
 import { SyncStateStore } from './SyncState';
 
@@ -135,6 +138,10 @@ export class SyncManager {
 	// How far the transfer in flight has got, and when the armed push is due.
 	// Both change far too often to redraw the whole panel for, so they are read
 	// by the two things that paint them rather than pushed through refreshUI().
+	// When the vault was last checked against the record rather than against
+	// the commit pointer.
+	private lastVerifyAt = 0;
+
 	private progress: SyncProgress | null = null;
 	private pushDueAt: number | null = null;
 	private pushWindowMs = 0;
@@ -382,6 +389,15 @@ export class SyncManager {
 			return;
 		}
 		await this.checkRemote();
+
+		// A device that has been away is the one most likely to have missed
+		// something, and the least likely to be in the middle of anything.
+		if (this.running) return;
+		try {
+			await this.deepVerify();
+		} catch (error) {
+			this.handleError(error);
+		}
 	}
 
 	// True while this vault has never been linked to a commit. Everything
@@ -409,7 +425,19 @@ export class SyncManager {
 			await this.stateStore.save(this.state);
 
 			await this.performPush('adopt');
-			new Notice('UltiSync: this vault is now the starting point.');
+
+			// The push above sent this vault. Anything that exists only on
+			// GitHub was recorded as synced without ever being downloaded, and
+			// waiting for "the next ordinary pull" to collect it is what left
+			// devices permanently short of files: the push this vault just made
+			// is the commit it will compare against from now on, so the remote
+			// never appears to move and no pull is ever triggered.
+			const recovered = await this.verifyNow();
+			new Notice(
+				recovered
+					? `UltiSync: this vault is now the starting point, and ${recovered} file(s) only on GitHub were downloaded.`
+					: 'UltiSync: this vault is now the starting point.',
+			);
 		} catch (error) {
 			this.state.lastSyncedCommit = null;
 			this.state.lastSyncedTree = {};
@@ -460,9 +488,35 @@ export class SyncManager {
 			this.state.lastRemoteCheck = now;
 			await this.stateStore.save(this.state);
 
-			this.dirty = false;
-			this.setStatus('synced', `Downloaded ${result.pulled} file(s).`);
-			new Notice(`UltiSync: downloaded ${result.pulled} file(s) from GitHub.`);
+			// The download replaced what both sides had and left files that exist
+			// only here exactly where they were. Nothing would notice them until
+			// somebody typed, so they are queued now rather than waiting for an
+			// edit that might never come.
+			const detector = new ChangeDetector(this.vault, this.settings);
+			const local = await detector.detectLocalChanges(
+				this.state,
+				this.settings.pushExtensions,
+				this.userNamed,
+			);
+			const outgoing = local.modifiedOrCreated.size;
+
+			this.dirty = outgoing > 0;
+			if (outgoing) {
+				this.record('info', `${outgoing} file(s) here are not on GitHub yet`);
+				this.scheduleDebouncedPush();
+			}
+
+			this.setStatus(
+				outgoing ? 'pending' : 'synced',
+				outgoing
+					? `Downloaded ${result.pulled} file(s). ${outgoing} to upload.`
+					: `Downloaded ${result.pulled} file(s).`,
+			);
+			new Notice(
+				outgoing
+					? `UltiSync: downloaded ${result.pulled} file(s) from GitHub. ${outgoing} file(s) only in this vault will be uploaded next.`
+					: `UltiSync: downloaded ${result.pulled} file(s) from GitHub.`,
+			);
 			this.refreshUI();
 		} catch (error) {
 			this.state.lastSyncedCommit = null;
@@ -630,6 +684,9 @@ export class SyncManager {
 		const remoteHead = ref.object.sha;
 
 		if (remoteHead === this.state.lastSyncedCommit) {
+			// Asked for explicitly, so the pointer is not taken at its word.
+			if (await this.verifyNow()) return;
+
 			await this.pruneConflictsAgainstSyncedTree();
 			this.state.lastRemoteCheck = new Date().toISOString();
 			await this.stateStore.save(this.state);
@@ -826,6 +883,9 @@ export class SyncManager {
 
 		this.clearErrorLatch();
 		this.dirty = false;
+		// A push is the moment this vault's record of the remote is freshest,
+		// and the moment it is most worth asking whether the vault matches it.
+		this.lastVerifyAt = 0;
 		if (result.deferredUntil !== null) {
 			this.dirty = true;
 			this.scheduleDeferredPush(result.deferredUntil);
@@ -1481,6 +1541,161 @@ export class SyncManager {
 		this.onProgress();
 	}
 
+	/**
+	 * Eligible files the recorded remote tree holds that this vault has never
+	 * had. Pure arithmetic over state already in memory, so it costs no request
+	 * and can run on the poll. The rule itself lives in Verify, where it can be
+	 * tested without a vault behind it.
+	 */
+	private pathsNeverPulled(): string[] {
+		return pathsNeverPulled({
+			tree: this.state.lastSyncedTree,
+			tracked: this.state.trackedFiles,
+			pullExtensions: this.settings.pullExtensions,
+			ignoredPaths: this.settings.ignoredPaths,
+			isWindows: Platform.isWin,
+			onDisk: (path) => this.vault.getAbstractFileByPath(path) instanceof TFile,
+		});
+	}
+
+	/**
+	 * The check the commit pointer cannot do. HEAD says whether the remote
+	 * moved; it never says whether this vault holds what the remote holds.
+	 * Starting from "Upload this vault" records the whole remote tree without
+	 * downloading any of it, so the two answers differ from the first moment
+	 * and no amount of polling would notice: the vault's own push is what set
+	 * the commit it keeps comparing against.
+	 *
+	 * Returns how many files it recovered.
+	 */
+	async verifyNow(): Promise<number> {
+		this.lastVerifyAt = Date.now();
+
+		const missing = this.pathsNeverPulled();
+		if (!missing.length) return 0;
+
+		this.debug(`verify found ${missing.length} recorded file(s) that never arrived`);
+		this.setStatus('pulling', `Fetching ${missing.length} file(s) that never arrived...`);
+		return this.repairNeverPulled(missing);
+	}
+
+	/**
+	 * Files this vault believes hold the remote's exact bytes, but whose size
+	 * on disk says otherwise: the same blob sha recorded, the same size this
+	 * vault wrote, and a byte count that does not match what GitHub has. That
+	 * combination is a write that was cut short.
+	 *
+	 * Not repaired automatically. A file whose size has moved since this vault
+	 * wrote it is an unpushed edit, and overwriting one of those to fix the
+	 * other is not a trade worth making without being asked.
+	 */
+	private sizeMismatches(remote: RemoteSnapshot): string[] {
+		const suspect: string[] = [];
+
+		for (const [path, tracked] of Object.entries(this.state.trackedFiles)) {
+			const entry = remote.entries.get(path);
+			if (!entry || entry.type !== 'blob' || entry.size === undefined) continue;
+			// A different blob is a difference this vault already knows how to
+			// reconcile; only the ones it claims to match are interesting.
+			if (entry.sha !== tracked.remoteSha) continue;
+
+			const file = this.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) continue;
+			if (file.stat.size === entry.size) continue;
+			// Moved since this vault wrote it: an edit, not a bad download.
+			if (tracked.size !== undefined && file.stat.size !== tracked.size) continue;
+
+			suspect.push(path);
+		}
+
+		return suspect;
+	}
+
+	/**
+	 * The thorough version, for the moments worth spending a request on: how
+	 * many eligible files the remote holds against how many this vault has, and
+	 * whether the ones it has are the right size.
+	 */
+	async deepVerify(): Promise<void> {
+		const head = this.state.lastSyncedCommit;
+		if (!head) return;
+
+		const github = this.getClient();
+		const commit = await github.getCommit(head);
+		const remote = await github.readTreeSnapshot(head, commit.tree.sha);
+
+		const eligible = [...remote.entries.keys()].filter(
+			(path) =>
+				matchesExtensions(path, this.settings.pullExtensions) &&
+				!isIgnoredPath(path, this.settings.ignoredPaths) &&
+				isSafeVaultPath(path) &&
+				isWritableOnThisPlatform(path, Platform.isWin),
+		);
+		const held = eligible.filter(
+			(path) => this.vault.getAbstractFileByPath(path) instanceof TFile,
+		).length;
+		this.debug(`deep-verify eligible=${eligible.length} held=${held}`);
+
+		const missing = this.pathsNeverPulled();
+		if (missing.length) {
+			this.setStatus('pulling', `Fetching ${missing.length} file(s) that never arrived...`);
+			await this.repairNeverPulled(missing);
+		}
+
+		const suspect = this.sizeMismatches(remote);
+		if (suspect.length) {
+			this.debug(`deep-verify size mismatch=[${suspect.join(', ')}]`);
+			this.record(
+				'error',
+				`${suspect.length} file(s) are a different size here than on GitHub: ${suspect
+					.slice(0, 3)
+					.map(basename)
+					.join(', ')}`,
+			);
+		}
+
+		this.lastVerifyAt = Date.now();
+	}
+
+	/** Free when it finds nothing, which is the ordinary case. */
+	private async verifyIfDue(): Promise<void> {
+		if (Date.now() - this.lastVerifyAt < VERIFY_INTERVAL_MS) return;
+		await this.verifyNow();
+	}
+
+	/**
+	 * Downloads files this vault has never had. The recorded tree is taken at
+	 * its word about what the remote holds, so only the blobs come off the
+	 * wire, and nothing local is overwritten: every path here is one with no
+	 * file on disk.
+	 */
+	private async repairNeverPulled(paths: string[]): Promise<number> {
+		const head = this.state.lastSyncedCommit;
+		if (!head) return 0;
+
+		const github = this.getClient();
+		const commit = await github.getCommit(head);
+		const remote = await github.readTreeSnapshot(head, commit.tree.sha);
+
+		this.markSelfWrite(...paths);
+		const pull = this.pullManager(github);
+		const result = await pull.applyRemoteChanges(remote, this.state, paths, []);
+		for (const line of result.trace) this.debug(`verify-trace ${line}`);
+
+		if (result.pulled) {
+			this.state.lastSuccessfulPull = new Date().toISOString();
+			this.record('pull', `Recovered ${result.pulled} file(s) that never arrived`);
+		}
+		await this.stateStore.save(this.state);
+
+		this.setStatus(
+			Object.keys(this.state.conflicts).length ? 'conflict' : 'synced',
+			result.pulled ? `Recovered ${result.pulled} file(s).` : 'Nothing to recover.',
+		);
+		this.refreshUI();
+		return result.pulled;
+	}
+
 	private async checkRemote(): Promise<void> {
 		if (!this.syncEnabled) return;
 		if (this.running) return;
@@ -1496,6 +1711,10 @@ export class SyncManager {
 				await this.pullNow();
 			} else if (this.dirty && !this.pushTimer) {
 				await this.pushNow();
+			} else {
+				// The commit pointer says there is nothing to do. That is exactly
+				// when the vault has to be asked whether it agrees.
+				await this.verifyIfDue();
 			}
 		} catch (error) {
 			this.handleError(error);

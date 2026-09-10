@@ -11,6 +11,12 @@ export const ACTIVITY_LIMIT = 30;
 export const PROGRESS_MIN_FILES = 10;
 export const PROGRESS_MIN_BYTES = 25 * 1024 * 1024;
 
+/**
+ * How often the vault is checked against what the record says it holds. The
+ * check itself is local arithmetic; only a mismatch costs a request.
+ */
+export const VERIFY_INTERVAL_MS = 60000;
+
 /** How often the progress bar and the push countdown are repainted. Fast
  *  enough that a five-second ring drains smoothly, cheap enough to run while
  *  nothing is happening: the paint returns immediately when both are idle. */
