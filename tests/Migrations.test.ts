@@ -86,6 +86,54 @@ describe('migrate', () => {
 		assert.deepEqual(state.lastSyncedTree, {});
 	});
 
+	// What a plugin update must never do. Obsidian replaces main.js and leaves
+	// data.json where it is, so the only way an update could ask for the
+	// credentials again is if this function dropped them on the way through.
+	it('carries credentials and the sync link through an update', () => {
+		const onDisk = {
+			schemaVersion: SCHEMA_VERSION,
+			settings: {
+				syncEnabled: true,
+				githubOwner: 'me',
+				githubRepo: 'notes',
+				branch: 'main',
+				token: 'github_pat_example',
+				pullExtensions: ['md'],
+				pushExtensions: ['md'],
+				ignoredPaths: ['private'],
+			},
+			state: {
+				deviceId: 'desktop-abc',
+				lastSyncedCommit: 'commit-sha',
+				trackedFiles: { 'a.md': { localHash: 'h', remoteSha: 's' } },
+				lastSyncedTree: { 'a.md': 's' },
+			},
+		};
+
+		const { settings, state, changed } = migrate(onDisk);
+
+		assert.equal(settings.githubOwner, 'me');
+		assert.equal(settings.githubRepo, 'notes');
+		assert.equal(settings.token, 'github_pat_example');
+		assert.equal(settings.syncEnabled, true);
+		// Still linked: without this the next launch would re-run the setup
+		// comparison and ask which side wins.
+		assert.equal(state.lastSyncedCommit, 'commit-sha');
+		assert.deepEqual(state.lastSyncedTree, { 'a.md': 's' });
+		assert.equal(changed, false);
+	});
+
+	it('keeps credentials from a file a newer build wrote', () => {
+		const { settings, state } = migrate({
+			schemaVersion: SCHEMA_VERSION + 5,
+			settings: { githubOwner: 'me', githubRepo: 'notes', token: 't', somethingNew: 1 },
+			state: { lastSyncedCommit: 'abc' },
+		});
+		assert.equal(settings.githubOwner, 'me');
+		assert.equal(settings.token, 't');
+		assert.equal(state.lastSyncedCommit, 'abc');
+	});
+
 	it('does not rewrite a file already at the current version', () => {
 		const current = migrate(null);
 		const { changed } = migrate({
