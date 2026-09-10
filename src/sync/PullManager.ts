@@ -31,8 +31,10 @@ export class PullManager {
 		private app: App,
 		private github: GitHubClient,
 		private settings: UltiSyncSettings,
-		/** Called as each file lands, so a long pull can say where it is. */
-		private onProgress: (done: number, total: number) => void = () => undefined,
+		/** Called as each file lands, so a long pull can say where it is. The
+		 *  byte total is what decides whether it is worth saying at all. */
+		private onProgress: (done: number, total: number, totalBytes: number) => void = () =>
+			undefined,
 	) {}
 
 	private get vault(): Vault {
@@ -195,9 +197,13 @@ export class PullManager {
 		state: SyncStateData,
 	): Promise<number> {
 		let pulled = 0;
+		const totalBytes = paths.reduce(
+			(sum, path) => sum + (remote.entries.get(path)?.size ?? 0),
+			0,
+		);
 		// Announced before the first request so the count appears immediately,
 		// rather than after the first batch has already come down.
-		this.onProgress(0, paths.length);
+		this.onProgress(0, paths.length, totalBytes);
 
 		for (let index = 0; index < paths.length; index += BATCH_SIZE) {
 			const batch = paths.slice(index, index + BATCH_SIZE);
@@ -223,7 +229,7 @@ export class PullManager {
 					...this.statOf(item.path),
 				};
 				pulled++;
-				this.onProgress(pulled, paths.length);
+				this.onProgress(pulled, paths.length, totalBytes);
 			}
 		}
 

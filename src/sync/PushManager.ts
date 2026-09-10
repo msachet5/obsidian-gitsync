@@ -133,8 +133,9 @@ export class PushManager {
 		private github: GitHubClient,
 		private settings: UltiSyncSettings,
 		/** Called as each candidate file is taken up, so a long push can say
-		 *  where it is. */
-		private onProgress: (done: number, total: number) => void = () => undefined,
+		 *  where it is. The byte total decides whether it is worth saying. */
+		private onProgress: (done: number, total: number, totalBytes: number) => void = () =>
+			undefined,
 	) {}
 
 	// Pushes local changes without pulling first.
@@ -357,11 +358,19 @@ export class PushManager {
 		// need uploading: the files that are skipped are skipped after they have
 		// been read and hashed, which is most of the wait on a large vault.
 		const candidates = detected.modifiedOrCreated.size;
+		// Read from the cached stats rather than the files, so sizing the job up
+		// front costs nothing.
+		let candidateBytes = 0;
+		for (const path of detected.modifiedOrCreated) {
+			const file = this.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) candidateBytes += file.stat.size;
+		}
+
 		let considered = 0;
-		this.onProgress(0, candidates);
+		this.onProgress(0, candidates, candidateBytes);
 
 		for (const path of detected.modifiedOrCreated) {
-			this.onProgress(++considered, candidates);
+			this.onProgress(++considered, candidates, candidateBytes);
 			if (!this.isPushable(path)) continue;
 
 			const file = this.vault.getAbstractFileByPath(path);

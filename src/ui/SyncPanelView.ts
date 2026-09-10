@@ -9,6 +9,7 @@ import {
 	countdownFraction,
 	progressPercent,
 } from '../types';
+import { ULTISYNC_ICON } from './icons';
 
 export const SYNC_PANEL_VIEW_TYPE = 'ultisync-panel';
 
@@ -101,7 +102,7 @@ export class SyncPanelView extends ItemView {
 	}
 
 	getIcon(): string {
-		return 'refresh-cw';
+		return ULTISYNC_ICON;
 	}
 
 	async onOpen(): Promise<void> {

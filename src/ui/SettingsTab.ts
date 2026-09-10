@@ -18,6 +18,7 @@ import {
 import { devicePlatform } from '../platform';
 import { usesSecretStorage } from '../TokenStore';
 import { normalizeExtension, normalizePath } from '../vault/PathFilter';
+import { BUG_ICON } from './icons';
 
 /** The credential fields, which are edited as a draft and applied by Save. */
 export type CredentialDraft = Pick<
@@ -257,7 +258,7 @@ export class SettingsTab extends PluginSettingTab {
 			{ heading: 'Ignored paths', dimmed: gated, rows: [this.ignoredPathsRow()] },
 			{ heading: 'Danger zone', cls: 'ultisync-danger-zone', rows: this.dangerZoneRows() },
 			{ heading: 'Device', rows: this.deviceRows() },
-			{ heading: 'Help', rows: this.helpRows() },
+			{ heading: 'Report a bug', rows: this.helpRows() },
 		];
 	}
 
@@ -688,20 +689,25 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	// ---------------------------------------------------------------------
-	// Help
+	// Report a bug
 	// ---------------------------------------------------------------------
 
 	private helpRows(): RowSpec[] {
 		return [
 			{
-				name: 'Report a bug',
-				desc: 'Opens a new issue on GitHub with the versions and platform already filled in. Posting needs a free GitHub account.',
-				aliases: ['issue', 'github', 'support', 'help', 'feedback'],
+				// Unnamed on purpose: the heading above already says it, and
+				// saying it twice in two lines reads as two separate things.
+				name: '',
+				desc: 'Open a new issue on GitHub with the versions and platform already filled in. Posting needs a free GitHub account.',
+				aliases: ['bug', 'issue', 'github', 'support', 'help', 'feedback'],
 				build: (setting) =>
 					setting.addButton((button) =>
-						button.setButtonText('Report a bug').onClick(() => {
-							window.open(this.bugReportUrl(), '_blank');
-						}),
+						button
+							.setIcon(BUG_ICON)
+							.setTooltip('Report a bug')
+							.onClick(() => {
+								window.open(this.bugReportUrl(), '_blank');
+							}),
 					),
 			},
 		];

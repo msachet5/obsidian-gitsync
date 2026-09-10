@@ -7,16 +7,31 @@ import {
 	progressPercent,
 } from '../types';
 
-const LABELS: Record<SyncStatus, string> = {
-	setup: '⚙ UltiSync setup needed',
-	off: '○ UltiSync off',
-	synced: '✓ Synced',
-	pending: '↑ Pending',
-	syncing: '↻ Syncing',
-	pulling: '↓ Pulling',
-	pushing: '↑ Pushing',
-	conflict: '⚠ Conflict',
-	error: '✕ UltiSync not working',
+// The status bar is a strip shared with every other plugin, so this says its
+// piece in one glyph. The words that used to sit beside them are still there on
+// hover, where they cost nobody any room.
+const ICONS: Record<SyncStatus, string> = {
+	setup: '⚙',
+	off: '○',
+	synced: '✓',
+	pending: '↑',
+	syncing: '↻',
+	pulling: '↓',
+	pushing: '↑',
+	conflict: '⚠',
+	error: '✕',
+};
+
+const WORDS: Record<SyncStatus, string> = {
+	setup: 'UltiSync setup needed',
+	off: 'UltiSync off',
+	synced: 'Synced',
+	pending: 'Pending',
+	syncing: 'Syncing',
+	pulling: 'Pulling',
+	pushing: 'Pushing',
+	conflict: 'Conflict',
+	error: 'UltiSync not working',
 };
 
 const PHASE_VERB: Record<SyncProgress['phase'], string> = {
@@ -81,12 +96,13 @@ export class StatusBarController {
 		this.item.setAttribute('title', this.title());
 	}
 
+	// A count appears only for a transfer large enough to have reported one,
+	// which is what keeps the strip still during the ordinary small ones.
 	private label(): string {
-		if (!this.progress) return LABELS[this.status];
+		if (!this.progress) return ICONS[this.status];
 
 		const { done, total, phase } = this.progress;
-		const arrow = phase === 'pull' ? '↓' : '↑';
-		return `${arrow} ${PHASE_VERB[phase]} ${done}/${total}`;
+		return `${phase === 'pull' ? '↓' : '↑'} ${done}/${total}`;
 	}
 
 	private title(): string {
@@ -97,6 +113,6 @@ export class StatusBarController {
 		if (this.countdown) {
 			return `Pushing in ${Math.ceil(this.countdown.remaining / 1000)}s. Editing restarts the wait.`;
 		}
-		return this.detail ?? LABELS[this.status];
+		return this.detail ?? WORDS[this.status];
 	}
 }

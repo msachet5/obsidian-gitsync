@@ -7,6 +7,7 @@ import { ConfirmModal, confirmWithModal } from './ui/ConfirmModal';
 import { CredentialDraft, SettingsTab } from './ui/SettingsTab';
 import { SetupCheckModal, SetupDecision } from './ui/SetupCheckModal';
 import { StatusBarController } from './ui/StatusBar';
+import { ULTISYNC_ICON, registerIcons } from './ui/icons';
 import { SYNC_PANEL_VIEW_TYPE, SyncPanelView } from './ui/SyncPanelView';
 import { SetupCheckResult, summarize } from './sync/SetupCheck';
 import { GitHubApiError } from './github/GitHubClient';
@@ -101,6 +102,8 @@ export default class UltiSyncPlugin extends Plugin {
 	private progressPainted = false;
 
 	async onload(): Promise<void> {
+		// Before anything asks for one by name.
+		registerIcons();
 		setConfigDir(this.app.vault.configDir);
 		await this.loadSettingsAndState();
 
@@ -145,7 +148,7 @@ export default class UltiSyncPlugin extends Plugin {
 				}),
 		);
 
-		this.addRibbonIcon('refresh-cw', 'UltiSync status', () => {
+		this.addRibbonIcon(ULTISYNC_ICON, 'UltiSync status', () => {
 			void this.revealPanel();
 		});
 

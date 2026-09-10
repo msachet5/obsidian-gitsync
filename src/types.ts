@@ -3,6 +3,14 @@ export const POLL_HOLD_AFTER_PUSH_MS = 10000;
 export const PUSH_DELAY_SECONDS = 5;
 export const ACTIVITY_LIMIT = 30;
 
+/**
+ * A transfer says nothing about itself until it is big enough to be worth
+ * watching. Below these it is over before the eye settles on it, and a count
+ * that flickers past is worse than no count at all.
+ */
+export const PROGRESS_MIN_FILES = 10;
+export const PROGRESS_MIN_BYTES = 25 * 1024 * 1024;
+
 /** How often the progress bar and the push countdown are repainted. Fast
  *  enough that a five-second ring drains smoothly, cheap enough to run while
  *  nothing is happening: the paint returns immediately when both are idle. */

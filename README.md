@@ -356,8 +356,8 @@ sync problem needs a follow-up question, and an anonymous one cannot be
 answered.
 
 A bug report is most useful with your UltiSync version, your Obsidian version
-and whether you are on desktop or mobile. **Settings → UltiSync → Help → Report
-a bug** opens an issue with all three already filled in.
+and whether you are on desktop or mobile. **Settings → UltiSync → Report a
+bug** opens an issue with all three already filled in.
 
 For anything security-related, please contact me privately through my
 [GitHub profile](https://github.com/msachet5) rather than posting it publicly. A

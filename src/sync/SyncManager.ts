@@ -15,6 +15,8 @@ import {
 	UltiSyncSettings,
 	LARGE_FILE_WARN_BYTES,
 	POLL_HOLD_AFTER_PUSH_MS,
+	PROGRESS_MIN_BYTES,
+	PROGRESS_MIN_FILES,
 	PULL_INTERVAL_MS,
 	PUSH_DELAY_SECONDS,
 	PushCountdown,
@@ -190,9 +192,26 @@ export class SyncManager {
 		return { remaining, total: this.pushWindowMs };
 	}
 
-	/** Reports file counts while a transfer runs, and clears them after. */
-	private reportProgress(phase: 'pull' | 'push', done: number, total: number): void {
-		this.progress = total > 0 ? { phase, done, total } : null;
+	/**
+	 * Reports file counts while a transfer runs. A job below both thresholds
+	 * reports nothing at all: it finishes faster than the readout can be read,
+	 * and a number that flashes past is worse than no number.
+	 */
+	private reportProgress(
+		phase: 'pull' | 'push',
+		done: number,
+		total: number,
+		totalBytes: number,
+	): void {
+		const worthWatching =
+			total >= PROGRESS_MIN_FILES || totalBytes >= PROGRESS_MIN_BYTES;
+		const next = worthWatching && total > 0 ? { phase, done, total } : null;
+
+		// Small transfers call this per file and change nothing; painting on
+		// every one of them would be pure waste.
+		if (next === null && this.progress === null) return;
+
+		this.progress = next;
 		this.onProgress();
 	}
 
@@ -204,15 +223,15 @@ export class SyncManager {
 
 	/** A PullManager wired to report where it has got to. */
 	private pullManager(github: GitHubClient): PullManager {
-		return new PullManager(this.app, github, this.settings, (done, total) =>
-			this.reportProgress('pull', done, total),
+		return new PullManager(this.app, github, this.settings, (done, total, bytes) =>
+			this.reportProgress('pull', done, total, bytes),
 		);
 	}
 
 	/** A PushManager wired the same way. */
 	private pushManager(github: GitHubClient): PushManager {
-		return new PushManager(this.vault, github, this.settings, (done, total) =>
-			this.reportProgress('push', done, total),
+		return new PushManager(this.vault, github, this.settings, (done, total, bytes) =>
+			this.reportProgress('push', done, total, bytes),
 		);
 	}
 
